@@ -9,6 +9,8 @@ from typing import Callable, List, Optional
 from jax import grad, jit
 import jax.numpy as jnp
 
+import numpy.typing as npt
+
 
 EPSILON_WEIGHT = np.inf
 N_NEIGHBORS = 15
@@ -19,7 +21,7 @@ LATEN_DIMS = 32
 
 
 def masked_path(paths, best_path) -> np.ndarray:
-    """ Calculate the adjacency matrix in high dimensional space.
+    """Calculate the adjacency matrix in high dimensional space.
 
     Parameters
     ----------
@@ -30,7 +32,7 @@ def masked_path(paths, best_path) -> np.ndarray:
     i, j = zip(*best_path)
     paths = paths[1:, 1:]
     masked = np.ones(paths.shape) * 0
-    dpath = paths[i, j] #- np.concatenate([[0,], paths[i, j]])[:-1]
+    dpath = paths[i, j]  # - np.concatenate([[0,], paths[i, j]])[:-1]
     masked[i, j] = dpath
     return masked
 
@@ -81,9 +83,9 @@ def calculate_distance_matrix(
 
 
 def high_dimensional_probability(d: np.ndarray, sigma: float) -> np.ndarray:
-    d = np.clip(d, 0., np.inf) # clamp to greater than zero
+    d = np.clip(d, 0.0, np.inf)  # clamp to greater than zero
     assert sigma > 0.0
-    return np.exp( -d / sigma)
+    return np.exp(-d / sigma)
 
 
 def estimate_sigma(
@@ -116,7 +118,8 @@ def estimate_sigma(
 
 
 def calculate_high_dimensional_probability_matrix(
-    dist: np.ndarray, n_neighbors: int,
+    dist: np.ndarray,
+    n_neighbors: int,
 ) -> np.ndarray:
     """Calculate the high dimensional probability matrix from the adjacency
     matrix representation of the graph.
@@ -146,7 +149,6 @@ def calculate_high_dimensional_probability_matrix(
     return prob
 
 
-
 def symmetrize_probability_matrix_tsne(prob: np.ndarray) -> np.ndarray:
     return prob + np.transpose(prob) - np.multiply(prob, np.transpose(prob))
 
@@ -171,20 +173,20 @@ def find_hyperparameters(min_dist: float):
     def f(x, min_dist):
         y = []
         for i in range(len(x)):
-            if(x[i] <= min_dist):
+            if x[i] <= min_dist:
                 y.append(1)
             else:
-                y.append(np.exp(- x[i] + min_dist))
+                y.append(np.exp(-x[i] + min_dist))
         return y
 
-    dist_low_dim = lambda x, a, b: 1 / (1 + a*x**(2*b))
+    dist_low_dim = lambda x, a, b: 1 / (1 + a * x ** (2 * b))
 
-    p , _ = optimize.curve_fit(dist_low_dim, x, f(x, min_dist))
+    p, _ = optimize.curve_fit(dist_low_dim, x, f(x, min_dist))
 
     a = p[0]
     b = p[1]
 
-    return 1.0, 1.0 #a, b
+    return 1.0, 1.0  # a, b
 
 
 @jit
@@ -198,9 +200,9 @@ def jax_euclidean_distances(i, j):
     """
     M = i.shape[0]
     N = j.shape[0]
-    I_dots = jnp.reshape(jnp.sum((i*i), axis=1), (M, 1)) * jnp.ones(shape=(1, N))
-    J_dots = jnp.sum((j*j), axis=1) * jnp.ones(shape=(M, 1))
-    D_squared =  I_dots + J_dots - 2*jnp.dot(i, j.T)
+    I_dots = jnp.reshape(jnp.sum((i * i), axis=1), (M, 1)) * jnp.ones(shape=(1, N))
+    J_dots = jnp.sum((j * j), axis=1) * jnp.ones(shape=(M, 1))
+    D_squared = I_dots + J_dots - 2 * jnp.dot(i, j.T)
     return D_squared
 
 
@@ -244,14 +246,14 @@ def jax_cross_entropy_gradient(p, y, a, b):
     y_diff = jnp.expand_dims(y, 1) - jnp.expand_dims(y, 0)
     inv_dist = jnp.power(1 + a * d**b, -1)
     q = jnp.dot(1 - p, jnp.power(0.001 + d, -1))
-    q = q * (1-jnp.identity(n))
+    q = q * (1 - jnp.identity(n))
     q = q / jnp.sum(q, axis=1, keepdims=True)
-    fact = jnp.expand_dims(a * p * (1e-8 + d)**(b-1) - q, 2)
+    fact = jnp.expand_dims(a * p * (1e-8 + d) ** (b - 1) - q, 2)
     return 2 * b * jnp.sum(fact * y_diff * jnp.expand_dims(inv_dist, 2), axis=1)
 
 
 class TemporalMAP:
-    """ TemporalMAP.
+    """TemporalMAP.
 
     Creates a low dimensional embedding of the input data that attempts to
     respect the temporal ordering of the data.
@@ -275,7 +277,9 @@ class TemporalMAP:
     sequence_shapes : list
 
     """
-    def __init__(self,
+
+    def __init__(
+        self,
         n_neighbors: int = N_NEIGHBORS,
         min_dist: float = MIN_DIST,
         n_components: int = 2,
@@ -301,14 +305,24 @@ class TemporalMAP:
         Parameters
         ----------
         sequences : list of arrays
+            These should be high dimensional arrays that represent the trajectories.
+            [(n_i, m), (n_j, m), ..., (n_k, m)] where n_i, is the length of 
+            trajectory i and m is the number of features for each timepoint.
         learning_rate : float
+            The learning rate for the optimization.
         max_iterations : int
-
+            The maximum number of interations for the optimization.
         Returns
         -------
         y : np.ndarray (N, n_components)
             The embedding in `n_components` dimensions.
         """
+
+        for seq in sequences:
+            if not isinstance(seq, np.ndarray):
+                raise TypeError("Trajectories should be numpy arrays")
+            if seq.ndim < self.n_components:
+                raise ValueError("Trajectories should be high dimensional")
 
         self._sequences = sequences
 
@@ -353,5 +367,5 @@ class TemporalMAP:
         -------
         """
         seq = self.sequence_shapes
-        slice_seq = lambda idx: slice(sum(seq[:idx]), sum(seq[:idx+1]), 1)
+        slice_seq = lambda idx: slice(sum(seq[:idx]), sum(seq[: idx + 1]), 1)
         return [self._embeddings[slice_seq(i), ...] for i in range(len(seq))]
