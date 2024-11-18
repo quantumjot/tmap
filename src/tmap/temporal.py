@@ -1,4 +1,6 @@
 import numpy as np
+import numpy.typing as npt
+
 from dtaidistance import dtw, dtw_ndim
 
 from scipy import optimize
@@ -8,8 +10,6 @@ from typing import Callable, List, Optional
 
 from jax import grad, jit
 import jax.numpy as jnp
-
-import numpy.typing as npt
 
 
 EPSILON_WEIGHT = np.inf
@@ -306,7 +306,7 @@ class TemporalMAP:
         ----------
         sequences : list of arrays
             These should be high dimensional arrays that represent the trajectories.
-            [(n_i, m), (n_j, m), ..., (n_k, m)] where n_i, is the length of 
+            [(n_i, m), (n_j, m), ..., (n_k, m)] where n_i, is the length of
             trajectory i and m is the number of features for each timepoint.
         learning_rate : float
             The learning rate for the optimization.
