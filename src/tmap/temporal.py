@@ -168,6 +168,8 @@ def find_hyperparameters(min_dist: float):
     b : float
     """
 
+    return 1.0, 1.0
+
     x = np.linspace(0, 3, 300)
 
     def f(x, min_dist):
@@ -186,7 +188,7 @@ def find_hyperparameters(min_dist: float):
     a = p[0]
     b = p[1]
 
-    return 1.0, 1.0  # a, b
+    return a, b
 
 
 @jit
