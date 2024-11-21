@@ -27,12 +27,14 @@ dependencies = [
     "dtaidistance",
     "jax",
     "matplotlib",
-    "numpy",
+    "numpy<2", 
     "pandas",
     "scikit-image",
     "scikit-learn",
     "scipy",
     "tqdm",
+    "ipykernel",
+    "btrack"
 ]
 description = "Temporal UMAP"
 dynamic = [
