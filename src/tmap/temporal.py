@@ -20,7 +20,7 @@ MAX_ITERATIONS = 200
 LATEN_DIMS = 32
 
 
-def masked_path(paths, best_path) -> np.ndarray:
+def masked_path(paths, best_path) -> npt.NDArray:
     """Calculate the adjacency matrix in high dimensional space.
 
     Parameters
@@ -39,7 +39,7 @@ def masked_path(paths, best_path) -> np.ndarray:
 
 def calculate_distance_matrix(
     sequences: List[np.ndarray], window: Optional[int] = None
-) -> np.ndarray:
+) -> npt.NDArray:
     """Calculate the distance matrix.
 
     Parameters
@@ -58,14 +58,14 @@ def calculate_distance_matrix(
 
     n = sum(seq_shapes)
 
-    distance_matrix = np.ones((n, n)) * 0
+    distance_matrix = np.ones((n, n), dtype=np.float32) * 0
 
     for i in tqdm(range(len(sequences)), desc="DTW"):
         for j in range(i + 1, len(sequences)):
 
             s1, s2 = sequences[i], sequences[j]
 
-            d, paths = dtw_ndim.warping_paths(s1, s2, window=window)
+            _, paths = dtw_ndim.warping_paths(s1, s2, window=window)
             best_path = dtw.best_path(paths)
 
             mask = masked_path(paths, best_path)
@@ -82,16 +82,17 @@ def calculate_distance_matrix(
     return distance_matrix
 
 
-def high_dimensional_probability(d: np.ndarray, sigma: float) -> np.ndarray:
+def high_dimensional_probability(d: npt.NDArray, sigma: float) -> npt.NDArray:
     d = np.clip(d, 0.0, np.inf)  # clamp to greater than zero
     assert sigma > 0.0
     return np.exp(-d / sigma)
 
 
 def estimate_sigma(
-    d: np.ndarray, n_neighbors: int, iterations: int = 20, tolerance: float = 1e-5
+    d: npt.NDArray, n_neighbors: int, iterations: int = 20, tolerance: float = 1e-5
 ):
-    """
+    """Binary search to estimate a value of sigma.
+
     Parameters
     ----------
 
@@ -102,8 +103,8 @@ def estimate_sigma(
     k = lambda p: np.power(2.0, np.sum(p))
     k_of_sigma = lambda sigma: k(high_dimensional_probability(d, sigma))
 
-    sigma_lower_estimate = 0.0
-    sigma_upper_estimate = 1000.0
+    sigma_lower_estimate = np.float128(0.0)
+    sigma_upper_estimate = np.float128(1000.0)
 
     for iter in range(iterations):
         sigma_estimate = (sigma_lower_estimate + sigma_upper_estimate) / 2
@@ -118,20 +119,20 @@ def estimate_sigma(
 
 
 def calculate_high_dimensional_probability_matrix(
-    dist: np.ndarray,
+    dist: npt.NDArray,
     n_neighbors: int,
-) -> np.ndarray:
+) -> npt.NDArray:
     """Calculate the high dimensional probability matrix from the adjacency
     matrix representation of the graph.
 
     Parameters
     ----------
-    dist : np.ndarray
+    dist : npt.NDArray
     n_neighbors : int
 
     Returns
     -------
-    prob : np.ndarray
+    prob : npt.NDArray
     """
 
     # calculate the minimum (non-zero) distance for each row
@@ -149,11 +150,11 @@ def calculate_high_dimensional_probability_matrix(
     return prob
 
 
-def symmetrize_probability_matrix_tsne(prob: np.ndarray) -> np.ndarray:
+def symmetrize_probability_matrix_tsne(prob: npt.NDArray) -> npt.NDArray:
     return prob + np.transpose(prob) - np.multiply(prob, np.transpose(prob))
 
 
-def symmetrize_probability_matrix_umap(prob: np.ndarray) -> np.ndarray:
+def symmetrize_probability_matrix_umap(prob: npt.NDArray) -> npt.NDArray:
     return (prob + np.transpose(prob)) / 2
 
 
@@ -168,7 +169,7 @@ def find_hyperparameters(min_dist: float):
     b : float
     """
 
-    return 1.0, 1.0
+    # return 1.0, 1.0
 
     x = np.linspace(0, 3, 300)
 
@@ -285,24 +286,34 @@ class TemporalMAP:
         n_neighbors: int = N_NEIGHBORS,
         min_dist: float = MIN_DIST,
         n_components: int = 2,
+        window: Optional[int] = None,
         pre_embedding_fn: Callable = SpectralEmbedding,
         distance_fn: Callable = dtw_ndim.warping_paths,
     ):
         self.n_neighbors = n_neighbors
         self.min_dist = min_dist
         self.n_components = n_components
+        self.window = window
 
         self._sequences = []
         self._P = None
         self._embedding = None
-
+        self._distance_matrix = None
+        
+    def calculate_distance_matrix(
+        self, 
+        sequences: List[np.ndarray],
+    ) -> npt.NDArray:
+        """Calculate the distance matrix."""
+        self._distance_matrix = calculate_distance_matrix(sequences, window=self.window)
+        return self._distance_matrix
+    
     def fit(
         self,
         sequences: List[np.ndarray],
         learning_rate: float = LEARNING_RATE,
         max_iterations: int = MAX_ITERATIONS,
-        window: Optional[int] = None,
-    ) -> np.ndarray:
+    ) -> npt.NDArray:
         """
         Parameters
         ----------
@@ -314,9 +325,10 @@ class TemporalMAP:
             The learning rate for the optimization.
         max_iterations : int
             The maximum number of interations for the optimization.
+
         Returns
         -------
-        y : np.ndarray (N, n_components)
+        y : npt.NDArray (N, n_components)
             The embedding in `n_components` dimensions.
         """
 
@@ -328,8 +340,13 @@ class TemporalMAP:
 
         self._sequences = sequences
 
-        dist = calculate_distance_matrix(sequences, window=window)
-        prob = calculate_high_dimensional_probability_matrix(dist, self.n_neighbors)
+        if self.distance_matrix is None:
+            _ = self.calculate_distance_matrix(sequences)
+
+        prob = calculate_high_dimensional_probability_matrix(
+            self.distance_matrix, 
+            self.n_neighbors
+        )
 
         a, b = find_hyperparameters(self.min_dist)
 
@@ -371,3 +388,12 @@ class TemporalMAP:
         seq = self.sequence_shapes
         slice_seq = lambda idx: slice(sum(seq[:idx]), sum(seq[: idx + 1]), 1)
         return [self._embeddings[slice_seq(i), ...] for i in range(len(seq))]
+
+    @property
+    def distance_matrix(self) -> Optional[npt.NDArray]:
+        return self._distance_matrix
+    
+    @property 
+    def embeddings(self) -> Optional[npt.NDArray]:
+        """Return the embeddings"""
+        return self._embedding
