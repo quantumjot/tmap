@@ -19,17 +19,12 @@ def plot_embeddings(mapper: TemporalMAP) -> None:
     -------
     None
     """
-
-    _y = mapper.embeddings
-
+    
     fig, axs = plt.subplots()
-    axs.plot(_y[:, 0], _y[:, 1], "k.")
+    axs.plot(mapper.embeddings[:, 0], mapper.embeddings[:, 1], "k.")
 
-    for i, seq in enumerate(mapper.sequence_shapes):
-        start_idx = sum(mapper.sequence_shapes[:max(0, i)])
-        end_idx = start_idx + seq 
-        s = slice(start_idx, end_idx, 1)
-        x, y = _y[s, 0], _y[s, 1]
+    for traj in mapper.trajectories:
+        x, y = traj[:, 0], traj[:, 1]
         points = np.array([x, y]).T.reshape(-1, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
 

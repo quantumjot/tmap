@@ -269,6 +269,9 @@ class TemporalMAP:
         The minimum distance in the low dimensional representation.
     n_components : int (default = 2)
         The number of dimensions of the low dimensional representation.
+    window : int, None 
+        The window used by the dynamic time warping function. Balances 
+        local temporal features vs global trajectory warping.
     pre_embedding_fn : Callable
         A function to initialize the embedding in low dimensional space
     distance_fn : Callable
@@ -384,10 +387,13 @@ class TemporalMAP:
 
         Returns
         -------
+        trajectories : list 
+            A list of numpy arrays of the low dimensional embeddings for each
+            trajectory.
         """
         seq = self.sequence_shapes
         slice_seq = lambda idx: slice(sum(seq[:idx]), sum(seq[: idx + 1]), 1)
-        return [self._embeddings[slice_seq(i), ...] for i in range(len(seq))]
+        return [self.embeddings[slice_seq(i), ...] for i in range(len(seq))]
 
     @property
     def distance_matrix(self) -> Optional[npt.NDArray]:
