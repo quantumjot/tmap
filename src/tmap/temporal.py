@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.typing as npt
+import umap
 
 from dtaidistance import dtw, dtw_ndim
 
@@ -10,6 +11,8 @@ from typing import Callable, List, Optional
 
 from jax import grad, jit
 import jax.numpy as jnp
+
+from tmap.base import MapperBase
 
 
 EPSILON_WEIGHT = np.inf
@@ -255,7 +258,7 @@ def jax_cross_entropy_gradient(p, y, a, b):
     return 2 * b * jnp.sum(fact * y_diff * jnp.expand_dims(inv_dist, 2), axis=1)
 
 
-class TemporalMAP:
+class TemporalMAP(MapperBase):
     """TemporalMAP.
 
     Creates a low dimensional embedding of the input data that attempts to
@@ -369,37 +372,25 @@ class TemporalMAP:
 
         return y
 
-    def transform(self):
-        raise NotImplementedError
 
-    @property
-    def sequence_shapes(self) -> List[int]:
-        """Shapes/Lengths of the sequences used.
+class DefaultUMAP(MapperBase):
+    """Simple wrapper around UMAP to provide comparison with TMAP"""
+    def __init__(self, *, min_dist: int = MIN_DIST, n_neighbors: int = 1):
+        self._umap = umap.UMAP()
+        self.min_dist = min_dist
+        self.n_neighbors = n_neighbors
+        self.window = None
 
-        Returns
-        -------
-        """
-        return [s.shape[0] for s in self._sequences]
+    def fit(self, sequences):
 
-    @property
-    def trajectories(self) -> List[np.ndarray]:
-        """Trajectories in the low dimensional representation.
+        self._sequences = sequences
+        x = np.concatenate(self._sequences, axis=0)
 
-        Returns
-        -------
-        trajectories : list 
-            A list of numpy arrays of the low dimensional embeddings for each
-            trajectory.
-        """
-        seq = self.sequence_shapes
-        slice_seq = lambda idx: slice(sum(seq[:idx]), sum(seq[: idx + 1]), 1)
-        return [self.embeddings[slice_seq(i), ...] for i in range(len(seq))]
+        y = self._umap.fit_transform(
+            x, 
+            min_dist=self.min_dist, 
+            n_neighbors=self.n_neighbors,
+        )
 
-    @property
-    def distance_matrix(self) -> Optional[npt.NDArray]:
-        return self._distance_matrix
-    
-    @property 
-    def embeddings(self) -> Optional[npt.NDArray]:
-        """Return the embeddings"""
-        return self._embedding
+        self._embedding = y
+        return y

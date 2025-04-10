@@ -3,11 +3,19 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 
+from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection
+from matplotlib.figure import Figure
 from tmap.temporal import TemporalMAP
 
 
-def plot_embeddings(mapper: TemporalMAP) -> None:
+def plot_embeddings(
+        mapper: TemporalMAP, 
+        *, 
+        fig: Figure | None = None, 
+        ax: Axes | None = None,
+        title: str = "",
+    ) -> None:
     """Plot the embeddings.
     
     Parameters
@@ -20,8 +28,10 @@ def plot_embeddings(mapper: TemporalMAP) -> None:
     None
     """
     
-    fig, axs = plt.subplots()
-    axs.plot(mapper.embeddings[:, 0], mapper.embeddings[:, 1], "k.")
+    if fig is None:
+        fig, ax = plt.subplots()
+
+    ax.plot(mapper.embeddings[:, 0], mapper.embeddings[:, 1], "k.")
 
     for traj in mapper.trajectories:
         x, y = traj[:, 0], traj[:, 1]
@@ -35,11 +45,8 @@ def plot_embeddings(mapper: TemporalMAP) -> None:
         lc = LineCollection(segments, cmap='RdBu', norm=norm)
         lc.set_array(dydx)
         lc.set_linewidth(2)
-        line = axs.add_collection(lc)
+        line = ax.add_collection(lc)
 
-
-    cbar = fig.colorbar(line, ax=axs)
+    cbar = fig.colorbar(line, ax=ax)
     cbar.set_label("Time", rotation=270)
-    axs.set_title(f"n_neighbors: {mapper.n_neighbors}, min_dist: {mapper.min_dist}, window: {mapper.window}")
-
-    plt.show()
+    ax.set_title(f"{title} | n_neighbors: {mapper.n_neighbors}, min_dist: {mapper.min_dist}, window: {mapper.window}")

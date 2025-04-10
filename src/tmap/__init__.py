@@ -1,1 +1,1 @@
-from tmap.temporal import TemporalMAP
+from tmap.temporal import DefaultUMAP, TemporalMAP

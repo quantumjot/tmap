@@ -33,6 +33,7 @@ dependencies = [
     "scikit-learn",
     "scipy",
     "tqdm",
+    "umap-learn",
 ]
 description = "Temporal UMAP"
 dynamic = [
