@@ -14,8 +14,6 @@ import jax.numpy as jnp
 
 from tmap.base import MapperBase
 
-import jax
-jax.config.update("jax_enable_x64", True)
 
 EPSILON_WEIGHT = np.inf
 N_NEIGHBORS = 15
@@ -109,8 +107,6 @@ def estimate_sigma(
         prob = high_dimensional_probability(d, sigma)
         return np.power(2, np.sum(prob))
        
-    # sigma_lower_estimate = np.float128(0.0)
-    # sigma_upper_estimate = np.float128(1000.0)
     sigma_lower_estimate = 0.0
     sigma_upper_estimate = 1000.0
 
@@ -366,7 +362,6 @@ class TemporalMAP(MapperBase):
         # now do gradient descent to find the embedding
         for i in tqdm(range(max_iterations), desc="Embedding"):
             xe = jax_cross_entropy_gradient(prob, y, a, b)
-            print(np.any(np.isnan(xe)))
             y = y - learning_rate * xe
 
         self._embedding = y

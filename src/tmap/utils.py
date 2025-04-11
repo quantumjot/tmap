@@ -48,9 +48,13 @@ def plot_embeddings(
         [xx.ravel().reshape(-1, 1), yy.ravel().reshape(-1, 1)], axis=-1
     )
 
+    # note(arl): this is a hack to get an approximate scaling for the vectors
+    dx = np.max([np.ptp(mapper.embeddings[:, 0]), np.ptp(mapper.embeddings[:, 1])])
+
     vectors = shepard_interp(
         vectors_from_tracks(mapper.trajectories),
         grid=grid,
+        max_radius=50*dx,
     )
 
     for traj in mapper.trajectories:
@@ -69,7 +73,7 @@ def plot_embeddings(
 
         ax.quiver(
             grid[:, 0], grid[:, 1], vectors[:, 0], vectors[:, 1],
-            angles='xy', scale_units='xy', scale=1, color='k'
+            angles="xy", scale_units="xy", scale=2, color="k", #zorder=1000,
         )
 
     cbar = fig.colorbar(line, ax=ax)
