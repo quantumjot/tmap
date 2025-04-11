@@ -1,24 +1,22 @@
+import jax
+import jax.numpy as jnp
 import numpy as np
 import numpy.typing as npt
 import umap
 
 from dtaidistance import dtw, dtw_ndim
-
 from scipy import optimize
 from sklearn.manifold import SpectralEmbedding
 from tqdm import tqdm
 from typing import Callable, List, Optional
-
-from jax import grad, jit
-import jax.numpy as jnp
 
 from tmap.base import MapperBase
 
 
 EPSILON_WEIGHT = np.inf
 N_NEIGHBORS = 15
-MIN_DIST = 0.25
-LEARNING_RATE = 1e-3
+MIN_DIST = 0.01
+LEARNING_RATE = 1e-1
 MAX_ITERATIONS = 200
 LATEN_DIMS = 32
 
@@ -86,7 +84,8 @@ def calculate_distance_matrix(
 
 
 def high_dimensional_probability(d: npt.NDArray, sigma: float) -> npt.NDArray:
-    d = np.clip(d, 0.0, np.inf)  # clamp to greater than zero
+    # d = np.clip(d, 0.0, np.inf)  # clamp to greater than zero
+    d = np.abs(d)
     assert sigma > 0.0
     return np.exp(-d / sigma)
 
@@ -191,7 +190,7 @@ def find_hyperparameters(min_dist: float):
     return a, b
 
 
-@jit
+@jax.jit
 def jax_euclidean_distances(i, j):
     """
     Parameters
@@ -205,10 +204,10 @@ def jax_euclidean_distances(i, j):
     I_dots = jnp.reshape(jnp.sum((i * i), axis=1), (M, 1)) * jnp.ones(shape=(1, N))
     J_dots = jnp.sum((j * j), axis=1) * jnp.ones(shape=(M, 1))
     D_squared = I_dots + J_dots - 2 * jnp.dot(i, j.T)
-    return D_squared
+    return jnp.maximum(0.0, D_squared)
 
 
-@jit
+@jax.jit
 def jax_inverse_dist(a, b, d_squared):
     """
     Parameters
@@ -220,38 +219,18 @@ def jax_inverse_dist(a, b, d_squared):
     return jnp.power(1.0 + a * jnp.power(d_squared, b), -1)
 
 
-@jit
-def jax_cross_entropy(p, y, a, b):
-    """
-    Parameters
-    ----------
-
-    Returns
-    -------
-    """
-    d_squared = jax_euclidean_distances(y, y)
-    q = jax_inverse_dist(a, b, d_squared)
-    return -p * jnp.log(q + 0.01) - (1 - p) * jnp.log(1 - q + 0.01)
-
-
-@jit
-def jax_cross_entropy_gradient(p, y, a, b):
-    """
-    Parameters
-    ----------
-
-    Returns
-    -------
-    """
+@jax.jit
+def jax_cross_entropy_gradient_2(p, y, a, b, *, eps: float = 1e-8):
     n = y.shape[0]
     d = jax_euclidean_distances(y, y)
-    y_diff = jnp.expand_dims(y, 1) - jnp.expand_dims(y, 0)
-    inv_dist = jnp.power(1.0 + a * d**b, -1)
-    q = jnp.dot(1 - p, jnp.power(0.001 + d, -1))
-    q = q * (1 - jnp.identity(n))
-    q = q / jnp.sum(q, axis=1, keepdims=True)
-    fact = jnp.expand_dims(a * p * (1e-8 + d) ** (b - 1) - q, 2)
-    return 2.0 * b * jnp.sum(fact * y_diff * jnp.expand_dims(inv_dist, 2), axis=1)
+    w = jnp.power(1.0 + a * (d + eps)**b, -1)
+    w = w * (1 - jnp.identity(n))
+    w_sum = jnp.sum(w, axis=1, keepdims=True)
+    q = w / (w_sum + eps)
+    q = jnp.clip(q, eps, 1.0-eps)
+    loss = -jnp.sum(p * jnp.log(q) + (1 - p) * jnp.log(1 - q))
+
+    return loss
 
 
 class TemporalMAP(MapperBase):
@@ -352,17 +331,21 @@ class TemporalMAP(MapperBase):
 
         a, b = find_hyperparameters(self.min_dist)
 
-        np.random.seed(42)
+        np.random.seed(123)
         X_train = np.concatenate(sequences, axis=0)
         model = SpectralEmbedding(
             n_components=self.n_components, n_neighbors=X_train.shape[-1]
         )
         y = model.fit_transform(X_train)
   
-        # now do gradient descent to find the embedding
-        for i in tqdm(range(max_iterations), desc="Embedding"):
-            xe = jax_cross_entropy_gradient(prob, y, a, b)
-            y = y - learning_rate * xe
+        grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
+        loss = np.inf
+
+        embed_pbar = tqdm(range(max_iterations))
+        for _ in embed_pbar:
+            embed_pbar.set_description(f"Embedding (loss: {loss:.3f})")
+            loss, grad = grad_fn(prob, y, a, b)
+            y = y - learning_rate * grad
 
         self._embedding = y
         self._P = prob
