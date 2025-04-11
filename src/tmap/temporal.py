@@ -14,6 +14,8 @@ import jax.numpy as jnp
 
 from tmap.base import MapperBase
 
+import jax
+jax.config.update("jax_enable_x64", True)
 
 EPSILON_WEIGHT = np.inf
 N_NEIGHBORS = 15
@@ -103,19 +105,25 @@ def estimate_sigma(
     -------
     """
 
-    k = lambda p: np.power(2.0, np.sum(p))
-    k_of_sigma = lambda sigma: k(high_dimensional_probability(d, sigma))
+    def k_of_sigma(sigma):
+        prob = high_dimensional_probability(d, sigma)
+        return np.power(2, np.sum(prob))
+       
+    # sigma_lower_estimate = np.float128(0.0)
+    # sigma_upper_estimate = np.float128(1000.0)
+    sigma_lower_estimate = 0.0
+    sigma_upper_estimate = 1000.0
 
-    sigma_lower_estimate = np.float128(0.0)
-    sigma_upper_estimate = np.float128(1000.0)
-
-    for iter in range(iterations):
+    for _ in range(iterations):
         sigma_estimate = (sigma_lower_estimate + sigma_upper_estimate) / 2
-        if k_of_sigma(sigma_estimate) < n_neighbors:
+        k_sigma_estimate = k_of_sigma(sigma_estimate)
+
+        if k_sigma_estimate < n_neighbors:
             sigma_lower_estimate = sigma_estimate
         else:
             sigma_upper_estimate = sigma_estimate
-        if np.abs(n_neighbors - k_of_sigma(sigma_estimate)) <= tolerance:
+
+        if np.abs(n_neighbors - k_sigma_estimate) <= tolerance:
             break
 
     return sigma_estimate
@@ -140,7 +148,7 @@ def calculate_high_dimensional_probability_matrix(
 
     # calculate the minimum (non-zero) distance for each row
     rho = [sorted(dist[i])[1] for i in range(dist.shape[0])]
-    prob = np.zeros_like(dist, dtype=np.float32)
+    prob = np.zeros_like(dist, dtype=np.float64)
 
     for row in range(prob.shape[0]):
         d = dist[row, ...] - rho[row]
@@ -174,24 +182,16 @@ def find_hyperparameters(min_dist: float):
 
     # return 1.0, 1.0
 
-    x = np.linspace(0, 3, 300)
+    x = np.linspace(0.0, 3.0, 300, dtype=np.float64)
 
     def f(x, min_dist):
-        y = []
-        for i in range(len(x)):
-            if x[i] <= min_dist:
-                y.append(1)
-            else:
-                y.append(np.exp(-x[i] + min_dist))
+        y = np.exp(-x + min_dist)
+        y[x<=min_dist] = 1.0
         return y
 
     dist_low_dim = lambda x, a, b: 1 / (1 + a * x ** (2 * b))
-
     p, _ = optimize.curve_fit(dist_low_dim, x, f(x, min_dist))
-
-    a = p[0]
-    b = p[1]
-
+    a, b = p
     return a, b
 
 
@@ -250,12 +250,12 @@ def jax_cross_entropy_gradient(p, y, a, b):
     n = y.shape[0]
     d = jax_euclidean_distances(y, y)
     y_diff = jnp.expand_dims(y, 1) - jnp.expand_dims(y, 0)
-    inv_dist = jnp.power(1 + a * d**b, -1)
+    inv_dist = jnp.power(1.0 + a * d**b, -1)
     q = jnp.dot(1 - p, jnp.power(0.001 + d, -1))
     q = q * (1 - jnp.identity(n))
     q = q / jnp.sum(q, axis=1, keepdims=True)
     fact = jnp.expand_dims(a * p * (1e-8 + d) ** (b - 1) - q, 2)
-    return 2 * b * jnp.sum(fact * y_diff * jnp.expand_dims(inv_dist, 2), axis=1)
+    return 2.0 * b * jnp.sum(fact * y_diff * jnp.expand_dims(inv_dist, 2), axis=1)
 
 
 class TemporalMAP(MapperBase):
@@ -362,10 +362,12 @@ class TemporalMAP(MapperBase):
             n_components=self.n_components, n_neighbors=X_train.shape[-1]
         )
         y = model.fit_transform(X_train)
-
+  
         # now do gradient descent to find the embedding
         for i in tqdm(range(max_iterations), desc="Embedding"):
-            y = y - learning_rate * jax_cross_entropy_gradient(prob, y, a, b)
+            xe = jax_cross_entropy_gradient(prob, y, a, b)
+            print(np.any(np.isnan(xe)))
+            y = y - learning_rate * xe
 
         self._embedding = y
         self._P = prob
