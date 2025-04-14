@@ -11,18 +11,25 @@ from tmap.temporal import TemporalMAP
 
 
 def plot_embeddings(
-        mapper: TemporalMAP, 
-        *, 
-        fig: Figure | None = None, 
-        ax: Axes | None = None,
-        title: str = "",
-    ) -> None:
+    mapper: TemporalMAP, 
+    *, 
+    fig: Figure | None = None, 
+    ax: Axes | None = None,
+    title: str = "",
+    show_flow: bool = False,
+) -> None:
     """Plot the embeddings.
     
     Parameters
     ----------
     mapper : TemporalMAP 
         An instance of the TemporalMAP.
+    fig : Figure
+        [optional] An instance of a matplotlib figure
+    ax : Axes 
+        [optional] An instance of a matplotlib axes
+    show_flow : bool 
+        Whether to show the flow field.
 
     Returns
     -------
@@ -36,26 +43,25 @@ def plot_embeddings(
 
     ax.plot(mapper.embeddings[:, 0], mapper.embeddings[:, 1], "k.")
 
+    if show_flow:
+        xx, yy = np.meshgrid(
+            np.linspace(np.min(mapper.embeddings[:, 0]), np.max(mapper.embeddings[:, 0]), 50),
+            np.linspace(np.min(mapper.embeddings[:, 1]), np.max(mapper.embeddings[:, 1]), 50),
+            indexing="ij",
+        )
 
+        grid = np.concatenate(
+            [xx.ravel().reshape(-1, 1), yy.ravel().reshape(-1, 1)], axis=-1
+        )
 
-    xx, yy = np.meshgrid(
-        np.linspace(np.min(mapper.embeddings[:, 0]), np.max(mapper.embeddings[:, 0]), 50),
-        np.linspace(np.min(mapper.embeddings[:, 1]), np.max(mapper.embeddings[:, 1]), 50),
-        indexing="ij",
-    )
+        # note(arl): this is a hack to get an approximate scaling for the vectors
+        dx = np.max([np.ptp(mapper.embeddings[:, 0]), np.ptp(mapper.embeddings[:, 1])])
 
-    grid = np.concatenate(
-        [xx.ravel().reshape(-1, 1), yy.ravel().reshape(-1, 1)], axis=-1
-    )
-
-    # note(arl): this is a hack to get an approximate scaling for the vectors
-    dx = np.max([np.ptp(mapper.embeddings[:, 0]), np.ptp(mapper.embeddings[:, 1])])
-
-    vectors = shepard_interp(
-        vectors_from_tracks(mapper.trajectories),
-        grid=grid,
-        max_radius=50*dx,
-    )
+        vectors = shepard_interp(
+            vectors_from_tracks(mapper.trajectories),
+            grid=grid,
+            max_radius=50*dx,
+        )
 
     for traj in mapper.trajectories:
         x, y = traj[:, 0], traj[:, 1]
@@ -71,6 +77,7 @@ def plot_embeddings(
         lc.set_linewidth(2)
         line = ax.add_collection(lc)
 
+    if show_flow:
         ax.quiver(
             grid[:, 0], grid[:, 1], vectors[:, 0], vectors[:, 1],
             angles="xy", scale_units="xy", scale=2, color="k", #zorder=1000,

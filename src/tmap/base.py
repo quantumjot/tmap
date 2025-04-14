@@ -1,7 +1,15 @@
 import abc
+import enum
 
 import numpy as np
 import numpy.typing as npt
+
+
+class PreEmbedding(str, enum.Enum):
+    RANDOM = "random"
+    UMAP = "umap"
+    SPECTRAL = "spectral"
+
 
 class MapperBase(abc.ABC):
 
@@ -45,3 +53,7 @@ class MapperBase(abc.ABC):
     def embeddings(self) -> npt.NDArray | None:
         """Return the embeddings"""
         return self._embedding
+
+
+class PreEmbeddingFunction(abc.ABC):
+    ...

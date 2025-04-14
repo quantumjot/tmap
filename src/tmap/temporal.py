@@ -1,3 +1,4 @@
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -10,7 +11,7 @@ from sklearn.manifold import SpectralEmbedding
 from tqdm import tqdm
 from typing import Callable, List, Optional
 
-from tmap.base import MapperBase
+from tmap.base import MapperBase, PreEmbedding
 
 
 EPSILON_WEIGHT = np.inf
@@ -19,6 +20,8 @@ MIN_DIST = 0.01
 LEARNING_RATE = 1e-1
 MAX_ITERATIONS = 200
 LATEN_DIMS = 32
+
+
 
 
 def masked_path(paths, best_path) -> npt.NDArray:
@@ -74,6 +77,8 @@ def calculate_distance_matrix(
             sx = slice(sum(seq_shapes[:i]), sum(seq_shapes[: i + 1]), 1)
             sy = slice(sum(seq_shapes[:j]), sum(seq_shapes[: j + 1]), 1)
             distance_matrix[sx, sy] = mask
+
+    # TODO(arl): should consider the connectivity of the trajectory too
 
     # now make the matrix symmetric
     distance_matrix = distance_matrix + distance_matrix.T
@@ -268,7 +273,7 @@ class TemporalMAP(MapperBase):
         min_dist: float = MIN_DIST,
         n_components: int = 2,
         window: Optional[int] = None,
-        pre_embedding_fn: Callable = SpectralEmbedding,
+        pre_embedding: PreEmbedding = PreEmbedding.SPECTRAL,
         distance_fn: Callable = dtw_ndim.warping_paths,
     ):
         self.n_neighbors = n_neighbors
@@ -337,7 +342,7 @@ class TemporalMAP(MapperBase):
             n_components=self.n_components, n_neighbors=X_train.shape[-1]
         )
         y = model.fit_transform(X_train)
-  
+
         grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
         loss = np.inf
 
