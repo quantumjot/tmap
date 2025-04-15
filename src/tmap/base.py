@@ -1,14 +1,17 @@
 import abc
-import enum
+
 
 import numpy as np
 import numpy.typing as npt
 
 
-class PreEmbedding(str, enum.Enum):
-    RANDOM = "random"
-    UMAP = "umap"
-    SPECTRAL = "spectral"
+EPSILON_WEIGHT = np.inf
+N_NEIGHBORS = 15
+N_COMPONENTS = 2
+MIN_DIST = 0.01
+LEARNING_RATE = 1e-1
+MAX_ITERATIONS = 200
+
 
 
 class MapperBase(abc.ABC):
@@ -55,5 +58,11 @@ class MapperBase(abc.ABC):
         return self._embedding
 
 
-class PreEmbeddingFunction(abc.ABC):
-    ...
+class LayoutBase(abc.ABC):
+
+    def __call__(self, *args, **kwargs):
+        return self.fit_transform(*args, **kwargs)
+
+    @abc.abstractmethod
+    def fit_transform(self, x: npt.NDArray, *, n_components: int = N_COMPONENTS) -> npt.NDArray:
+        raise NotImplementedError

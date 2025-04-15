@@ -1,2 +1,2 @@
-from tmap.base import PreEmbedding
+from tmap.layout import InitialLayout
 from tmap.temporal import DefaultUMAP, TemporalMAP

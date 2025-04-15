@@ -7,19 +7,13 @@ import umap
 
 from dtaidistance import dtw, dtw_ndim
 from scipy import optimize
-from sklearn.manifold import SpectralEmbedding
 from tqdm import tqdm
 from typing import Callable, List, Optional
 
-from tmap.base import MapperBase, PreEmbedding
+from tmap import base, layout
 
 
-EPSILON_WEIGHT = np.inf
-N_NEIGHBORS = 15
-MIN_DIST = 0.01
-LEARNING_RATE = 1e-1
-MAX_ITERATIONS = 200
-LATEN_DIMS = 32
+
 
 
 
@@ -84,7 +78,7 @@ def calculate_distance_matrix(
 
     # now make the matrix symmetric
     distance_matrix = distance_matrix + distance_matrix.T
-    distance_matrix[distance_matrix == 0] = EPSILON_WEIGHT
+    distance_matrix[distance_matrix == 0] = base.EPSILON_WEIGHT
     distance_matrix[np.eye(n).astype(bool)] = 0.0
 
     return distance_matrix
@@ -159,7 +153,6 @@ def calculate_high_dimensional_probability_matrix(
 
     # make the distances compatible by enforcing symmetry
     prob = symmetrize_probability_matrix_umap(prob)
-
     return prob
 
 
@@ -199,7 +192,8 @@ def find_hyperparameters(min_dist: float):
 
 @jax.jit
 def jax_euclidean_distances(i, j):
-    """
+    """Calculate the Euclidean distances between two arrays.
+
     Parameters
     ----------
 
@@ -215,19 +209,15 @@ def jax_euclidean_distances(i, j):
 
 
 @jax.jit
-def jax_inverse_dist(a, b, d_squared):
-    """
+def jax_cross_entropy_gradient_2(p, y, a, b, *, eps: float = 1e-8):
+    """Calculate the BCE gradient.
+
     Parameters
     ----------
 
     Returns
     -------
     """
-    return jnp.power(1.0 + a * jnp.power(d_squared, b), -1)
-
-
-@jax.jit
-def jax_cross_entropy_gradient_2(p, y, a, b, *, eps: float = 1e-8):
     n = y.shape[0]
     d = jax_euclidean_distances(y, y)
     w = jnp.power(1.0 + a * (d + eps)**b, -1)
@@ -236,11 +226,10 @@ def jax_cross_entropy_gradient_2(p, y, a, b, *, eps: float = 1e-8):
     q = w / (w_sum + eps)
     q = jnp.clip(q, eps, 1.0-eps)
     loss = -jnp.sum(p * jnp.log(q) + (1 - p) * jnp.log(1 - q))
-
     return loss
 
 
-class TemporalMAP(MapperBase):
+class TemporalMAP(base.MapperBase):
     """TemporalMAP.
 
     Creates a low dimensional embedding of the input data that attempts to
@@ -271,11 +260,11 @@ class TemporalMAP(MapperBase):
 
     def __init__(
         self,
-        n_neighbors: int = N_NEIGHBORS,
-        min_dist: float = MIN_DIST,
-        n_components: int = 2,
+        n_neighbors: int = base.N_NEIGHBORS,
+        min_dist: float = base.MIN_DIST,
+        n_components: int = base.N_COMPONENTS,
         window: Optional[int] = None,
-        pre_embedding: PreEmbedding = PreEmbedding.SPECTRAL,
+        layout: layout.InitialLayout = layout.InitialLayout.SPECTRAL,
         distance_fn: Callable = dtw_ndim.warping_paths,
     ):
         self.n_neighbors = n_neighbors
@@ -287,6 +276,7 @@ class TemporalMAP(MapperBase):
         self._P = None
         self._embedding = None
         self._distance_matrix = None
+        self._layout = layout
         
     def calculate_distance_matrix(
         self, 
@@ -299,8 +289,8 @@ class TemporalMAP(MapperBase):
     def fit(
         self,
         sequences: List[np.ndarray],
-        learning_rate: float = LEARNING_RATE,
-        max_iterations: int = MAX_ITERATIONS,
+        learning_rate: float = base.LEARNING_RATE,
+        max_iterations: int = base.MAX_ITERATIONS,
     ) -> npt.NDArray:
         """
         Parameters
@@ -339,11 +329,13 @@ class TemporalMAP(MapperBase):
         a, b = find_hyperparameters(self.min_dist)
 
         np.random.seed(123)
-        X_train = np.concatenate(sequences, axis=0)
-        model = SpectralEmbedding(
-            n_components=self.n_components, n_neighbors=X_train.shape[-1]
-        )
-        y = model.fit_transform(X_train)
+        x = np.concatenate(sequences, axis=0)
+        # model = SpectralEmbedding(
+        #     n_components=self.n_components, n_neighbors=X_train.shape[-1]
+        # )
+        # y = model.fit_transform(X_train)
+        print(self._layout.__dict__)
+        y = self._layout(x)
 
         grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
         loss = np.inf
@@ -360,9 +352,9 @@ class TemporalMAP(MapperBase):
         return y
 
 
-class DefaultUMAP(MapperBase):
+class DefaultUMAP(base.MapperBase):
     """Simple wrapper around UMAP to provide comparison with TMAP"""
-    def __init__(self, *, min_dist: int = MIN_DIST, n_neighbors: int = 1):
+    def __init__(self, *, min_dist: int = base.MIN_DIST, n_neighbors: int = 1):
         self._umap = umap.UMAP()
         self.min_dist = min_dist
         self.n_neighbors = n_neighbors

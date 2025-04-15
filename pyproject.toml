@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python",
     "Topic :: Scientific/Engineering :: Visualization",
 ]
+
 dependencies = [
     "dtaidistance",
     "jax",
@@ -35,6 +36,7 @@ dependencies = [
     "tqdm",
     "umap-learn",
 ]
+
 description = "Temporal UMAP"
 dynamic = [
     "version",
@@ -44,3 +46,23 @@ readme = "README.md"
 requires-python = ">=3.8"
 license.file = "LICENCE.md"
 urls.homepage = "https://github.com/quantumjot/tmap"
+
+[project.optional-dependencies]
+dev = [
+    "ruff >= 0.0.61",
+    "black >= 23.3.0",
+    "pytest >= 7.1.2",
+]
+
+[tool.ruff]
+# Ruff configuration (optional, but recommended)
+select = ["E", "W", "F", "I", "C"] # Enable error, warning, and style checks
+ignore = ["E501"]  # Ignore line length errors, if you prefer
+
+[tool.black]
+# Black configuration
+line-length = 88
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312'] # Target Python versions
+
+[tool.pytest]
+# Pytest configuration
