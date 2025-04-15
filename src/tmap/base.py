@@ -1,9 +1,7 @@
 import abc
 
-
 import numpy as np
 import numpy.typing as npt
-
 
 EPSILON_WEIGHT = np.inf
 N_NEIGHBORS = 15
@@ -51,8 +49,8 @@ class MapperBase(abc.ABC):
     @property
     def distance_matrix(self) -> npt.NDArray | None:
         return self._distance_matrix
-    
-    @property 
+
+    @property
     def embeddings(self) -> npt.NDArray | None:
         """Return the embeddings"""
         return self._embedding

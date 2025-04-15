@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-from tmap import InitialLayout, TemporalMAP 
-
+from tmap import InitialLayout, TemporalMAP
 
 TEST_DATA = [
     np.random.random((15, 3)),

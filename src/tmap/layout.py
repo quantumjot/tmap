@@ -1,9 +1,7 @@
-import enum 
-import umap
-import numpy as np
-import numpy.typing as npt
-
+import enum
 from functools import partial
+
+import numpy as np
 from sklearn.manifold import SpectralEmbedding
 
 from tmap.base import LayoutBase
@@ -18,7 +16,7 @@ class SpectralLayout(LayoutBase):
             n_components=n_components, n_neighbors=x.shape[-1]
         )
         return model.fit_transform(x)
-    
+
 
 class RandomLayout(LayoutBase):
     def __init__(self):

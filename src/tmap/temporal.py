@@ -1,21 +1,16 @@
 
+from typing import Callable, List, Optional
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import numpy.typing as npt
 import umap
-
 from dtaidistance import dtw, dtw_ndim
 from scipy import optimize
 from tqdm import tqdm
-from typing import Callable, List, Optional
 
 from tmap import base, layout
-
-
-
-
-
 
 
 def masked_path(paths, best_path) -> npt.NDArray:
@@ -106,7 +101,7 @@ def estimate_sigma(
     def k_of_sigma(sigma):
         prob = high_dimensional_probability(d, sigma)
         return np.power(2, np.sum(prob))
-       
+
     sigma_lower_estimate = 0.0
     sigma_upper_estimate = 1000.0
 
@@ -277,15 +272,15 @@ class TemporalMAP(base.MapperBase):
         self._embedding = None
         self._distance_matrix = None
         self._layout = layout
-        
+
     def calculate_distance_matrix(
-        self, 
+        self,
         sequences: List[np.ndarray],
     ) -> npt.NDArray:
         """Calculate the distance matrix."""
         self._distance_matrix = calculate_distance_matrix(sequences, window=self.window)
         return self._distance_matrix
-    
+
     def fit(
         self,
         sequences: List[np.ndarray],
@@ -322,7 +317,7 @@ class TemporalMAP(base.MapperBase):
             _ = self.calculate_distance_matrix(sequences)
 
         prob = calculate_high_dimensional_probability_matrix(
-            self.distance_matrix, 
+            self.distance_matrix,
             self.n_neighbors
         )
 
@@ -366,8 +361,8 @@ class DefaultUMAP(base.MapperBase):
         x = np.concatenate(self._sequences, axis=0)
 
         y = self._umap.fit_transform(
-            x, 
-            min_dist=self.min_dist, 
+            x,
+            min_dist=self.min_dist,
             n_neighbors=self.n_neighbors,
         )
 

@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-
+import numpy.typing as npt
 from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
+
 from tmap.flow import shepard_interp
 from tmap.temporal import TemporalMAP
 
 
 def plot_embeddings(
-    mapper: TemporalMAP, 
-    *, 
-    fig: Figure | None = None, 
+    mapper: TemporalMAP,
+    *,
+    fig: Figure | None = None,
     ax: Axes | None = None,
     show_flow: bool = True,
     title: str = "tmap",
@@ -39,7 +40,7 @@ def plot_embeddings(
     """
     if np.isnan(mapper.embeddings[0, 0]):
         return
-    
+
     if fig is None:
         fig, ax = plt.subplots()
 
@@ -112,7 +113,7 @@ def vectors_from_tracks(
         # track_arr = np.stack(track_data, axis=-1)
         t = np.arange(0, track_arr.shape[0])[:, None]
         track_arr = np.concatenate(
-            [t, track_arr], 
+            [t, track_arr],
             axis=-1,
         )
         d = np.diff(track_arr, n=1, axis=0)
