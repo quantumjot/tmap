@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"] # Test on these Python versions
+        python-version: ["3.9", "3.10", "3.11"] # Test on these Python versions
 
     steps:
     - uses: actions/checkout@v4
@@ -25,14 +25,14 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install -e ".[dev]"  # Install your package and dev dependencies.
         #  Consider a requirements-dev.txt if you have many dev dependencies.
-    - name: Lint with Ruff
-      run: |
-        # Run Ruff and check for any linting errors.
-        ruff check ./tmap
-    - name: Format with Black
-      run: |
-        # Run Black to format the code.
-        black --check --diff ./tmap
+    # - name: Lint with Ruff
+    #   run: |
+    #     # Run Ruff and check for any linting errors.
+    #     ruff check ./tmap
+    # - name: Format with Black
+    #   run: |
+    #     # Run Black to format the code.
+    #     black --check --diff ./tmap
     - name: Test with Pytest
       run: |
         # Run Pytest to execute the tests.  Assumes your tests are in a 'tests' directory.

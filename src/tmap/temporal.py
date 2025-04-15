@@ -308,7 +308,7 @@ class TemporalMAP(base.MapperBase):
         for seq in sequences:
             if not isinstance(seq, np.ndarray):
                 raise TypeError("Trajectories should be numpy arrays")
-            if seq.ndim < self.n_components:
+            if seq.shape[-1] < self.n_components:
                 raise ValueError("Trajectories should be high dimensional")
 
         self._sequences = sequences
@@ -325,12 +325,8 @@ class TemporalMAP(base.MapperBase):
 
         np.random.seed(123)
         x = np.concatenate(sequences, axis=0)
-        # model = SpectralEmbedding(
-        #     n_components=self.n_components, n_neighbors=X_train.shape[-1]
-        # )
-        # y = model.fit_transform(X_train)
-        print(self._layout.__dict__)
-        y = self._layout(x)
+        y = self._layout(x, n_components=self.n_components)
+        print(y.shape)
 
         grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
         loss = np.inf

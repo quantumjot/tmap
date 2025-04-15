@@ -19,3 +19,10 @@ def test_layout(layout):
     t = TemporalMAP(layout=layout)
     y = t.fit(TEST_DATA)
     assert y.ndim == 2
+
+
+@pytest.mark.parametrize("ndim", (2, 3))
+def test_ndim(ndim):
+    t = TemporalMAP(n_components=ndim)
+    y = t.fit(TEST_DATA)
+    assert y.shape[-1] == ndim
