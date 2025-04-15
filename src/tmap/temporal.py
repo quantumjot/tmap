@@ -78,7 +78,9 @@ def calculate_distance_matrix(
             sy = slice(sum(seq_shapes[:j]), sum(seq_shapes[: j + 1]), 1)
             distance_matrix[sx, sy] = mask
 
-    # TODO(arl): should consider the connectivity of the trajectory too
+    # TODO(arl): should consider the local connectivity of the trajectory too
+    local = [[0.1] * (len(sequences[i])-1) + [np.inf] for i in range(len(sequences))]
+    distance_matrix[np.eye(n, k=1).astype(bool)] = np.concatenate(local)[:-1]
 
     # now make the matrix symmetric
     distance_matrix = distance_matrix + distance_matrix.T

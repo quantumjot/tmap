@@ -15,8 +15,8 @@ def plot_embeddings(
     *, 
     fig: Figure | None = None, 
     ax: Axes | None = None,
-    title: str = "",
-    show_flow: bool = False,
+    show_flow: bool = True,
+    title: str = "tmap",
 ) -> None:
     """Plot the embeddings.
     
@@ -30,6 +30,8 @@ def plot_embeddings(
         [optional] An instance of a matplotlib axes
     show_flow : bool 
         Whether to show the flow field.
+    title : str
+        The title of the plot.
 
     Returns
     -------
@@ -80,7 +82,7 @@ def plot_embeddings(
     if show_flow:
         ax.quiver(
             grid[:, 0], grid[:, 1], vectors[:, 0], vectors[:, 1],
-            angles="xy", scale_units="xy", scale=2, color="k", #zorder=1000,
+            angles="xy", scale_units="xy", scale=2, color="k", zorder=1000,
         )
 
     cbar = fig.colorbar(line, ax=ax)
