@@ -56,8 +56,8 @@ dev = [
 
 [tool.ruff]
 # Ruff configuration (optional, but recommended)
-select = ["E", "W", "F", "I", "C"] # Enable error, warning, and style checks
-ignore = ["E501"]  # Ignore line length errors, if you prefer
+lint.select = ["E", "W", "F", "I", "C"] # Enable error, warning, and style checks
+lint.ignore = ["E501"]  # Ignore line length errors, if you prefer
 
 [tool.black]
 # Black configuration
