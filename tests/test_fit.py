@@ -14,6 +14,7 @@ def test_map():
     y = t.fit(TEST_DATA)
     assert y.ndim == 2
 
+
 @pytest.mark.parametrize("layout", (l for l in InitialLayout))
 def test_layout(layout):
     t = TemporalMAP(layout=layout)

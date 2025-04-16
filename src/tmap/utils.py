@@ -20,16 +20,16 @@ def plot_embeddings(
     title: str = "tmap",
 ) -> None:
     """Plot the embeddings.
-    
+
     Parameters
     ----------
-    mapper : TemporalMAP 
+    mapper : TemporalMAP
         An instance of the TemporalMAP.
     fig : Figure
         [optional] An instance of a matplotlib figure
-    ax : Axes 
+    ax : Axes
         [optional] An instance of a matplotlib axes
-    show_flow : bool 
+    show_flow : bool
         Whether to show the flow field.
     title : str
         The title of the plot.
@@ -48,8 +48,12 @@ def plot_embeddings(
 
     if show_flow:
         xx, yy = np.meshgrid(
-            np.linspace(np.min(mapper.embeddings[:, 0]), np.max(mapper.embeddings[:, 0]), 50),
-            np.linspace(np.min(mapper.embeddings[:, 1]), np.max(mapper.embeddings[:, 1]), 50),
+            np.linspace(
+                np.min(mapper.embeddings[:, 0]), np.max(mapper.embeddings[:, 0]), 50
+            ),
+            np.linspace(
+                np.min(mapper.embeddings[:, 1]), np.max(mapper.embeddings[:, 1]), 50
+            ),
             indexing="ij",
         )
 
@@ -63,7 +67,7 @@ def plot_embeddings(
         vectors = shepard_interp(
             vectors_from_tracks(mapper.trajectories),
             grid=grid,
-            max_radius=50*dx,
+            max_radius=50 * dx,
         )
 
     for traj in mapper.trajectories:
@@ -75,20 +79,29 @@ def plot_embeddings(
         # this should probably be adjusted to absolute time
         dydx = np.linspace(0, 1, len(x))
         norm = plt.Normalize(dydx.min(), dydx.max())
-        lc = LineCollection(segments, cmap='RdBu', norm=norm)
+        lc = LineCollection(segments, cmap="RdBu", norm=norm)
         lc.set_array(dydx)
         lc.set_linewidth(2)
         line = ax.add_collection(lc)
 
     if show_flow:
         ax.quiver(
-            grid[:, 0], grid[:, 1], vectors[:, 0], vectors[:, 1],
-            angles="xy", scale_units="xy", scale=2, color="k", zorder=1000,
+            grid[:, 0],
+            grid[:, 1],
+            vectors[:, 0],
+            vectors[:, 1],
+            angles="xy",
+            scale_units="xy",
+            scale=2,
+            color="k",
+            zorder=1000,
         )
 
     cbar = fig.colorbar(line, ax=ax)
     cbar.set_label("Time", rotation=270)
-    ax.set_title(f"{title} | n_neighbors: {mapper.n_neighbors}, min_dist: {mapper.min_dist}, window: {mapper.window}")
+    ax.set_title(
+        f"{title} | n_neighbors: {mapper.n_neighbors}, min_dist: {mapper.min_dist}, window: {mapper.window}"
+    )
 
 
 def vectors_from_tracks(

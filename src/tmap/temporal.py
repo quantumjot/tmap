@@ -1,4 +1,3 @@
-
 from typing import Callable, List, Optional
 
 import jax
@@ -68,7 +67,7 @@ def calculate_distance_matrix(
             distance_matrix[sx, sy] = mask
 
     # TODO(arl): should consider the local connectivity of the trajectory too
-    local = [[0.1] * (len(sequences[i])-1) + [np.inf] for i in range(len(sequences))]
+    local = [[0.1] * (len(sequences[i]) - 1) + [np.inf] for i in range(len(sequences))]
     distance_matrix[np.eye(n, k=1).astype(bool)] = np.concatenate(local)[:-1]
 
     # now make the matrix symmetric
@@ -169,14 +168,11 @@ def find_hyperparameters(min_dist: float):
     a : float
     b : float
     """
-
-    # return 1.0, 1.0
-
     x = np.linspace(0.0, 3.0, 300, dtype=np.float64)
 
     def f(x, min_dist):
         y = np.exp(-x + min_dist)
-        y[x<=min_dist] = 1.0
+        y[x <= min_dist] = 1.0
         return y
 
     dist_low_dim = lambda x, a, b: 1 / (1 + a * x ** (2 * b))
@@ -215,11 +211,11 @@ def jax_cross_entropy_gradient_2(p, y, a, b, *, eps: float = 1e-8):
     """
     n = y.shape[0]
     d = jax_euclidean_distances(y, y)
-    w = jnp.power(1.0 + a * (d + eps)**b, -1)
+    w = jnp.power(1.0 + a * (d + eps) ** b, -1)
     w = w * (1 - jnp.identity(n))
     w_sum = jnp.sum(w, axis=1, keepdims=True)
     q = w / (w_sum + eps)
-    q = jnp.clip(q, eps, 1.0-eps)
+    q = jnp.clip(q, eps, 1.0 - eps)
     loss = -jnp.sum(p * jnp.log(q) + (1 - p) * jnp.log(1 - q))
     return loss
 
@@ -238,8 +234,8 @@ class TemporalMAP(base.MapperBase):
         The minimum distance in the low dimensional representation.
     n_components : int (default = 2)
         The number of dimensions of the low dimensional representation.
-    window : int, None 
-        The window used by the dynamic time warping function. Balances 
+    window : int, None
+        The window used by the dynamic time warping function. Balances
         local temporal features vs global trajectory warping.
     pre_embedding_fn : Callable
         A function to initialize the embedding in low dimensional space
@@ -317,8 +313,7 @@ class TemporalMAP(base.MapperBase):
             _ = self.calculate_distance_matrix(sequences)
 
         prob = calculate_high_dimensional_probability_matrix(
-            self.distance_matrix,
-            self.n_neighbors
+            self.distance_matrix, self.n_neighbors
         )
 
         a, b = find_hyperparameters(self.min_dist)
@@ -345,6 +340,7 @@ class TemporalMAP(base.MapperBase):
 
 class DefaultUMAP(base.MapperBase):
     """Simple wrapper around UMAP to provide comparison with TMAP"""
+
     def __init__(self, *, min_dist: int = base.MIN_DIST, n_neighbors: int = 1):
         self._umap = umap.UMAP()
         self.min_dist = min_dist

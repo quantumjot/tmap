@@ -16,9 +16,7 @@ def _calculate_shepard_weights(
 ) -> npt.NDArray:
     """Calculate Shepard weights."""
     d = _calculate_distance_matrix(x, xy)
-    weights = np.power(
-        np.clip(max_radius - d, 0, np.inf) / (max_radius * d), power
-    )
+    weights = np.power(np.clip(max_radius - d, 0, np.inf) / (max_radius * d), power)
     return weights
 
 

@@ -11,7 +11,6 @@ LEARNING_RATE = 1e-1
 MAX_ITERATIONS = 200
 
 
-
 class MapperBase(abc.ABC):
 
     @abc.abstractmethod
@@ -38,7 +37,7 @@ class MapperBase(abc.ABC):
 
         Returns
         -------
-        trajectories : list 
+        trajectories : list
             A list of numpy arrays of the low dimensional embeddings for each
             trajectory.
         """
@@ -62,5 +61,7 @@ class LayoutBase(abc.ABC):
         return self.fit_transform(*args, **kwargs)
 
     @abc.abstractmethod
-    def fit_transform(self, x: npt.NDArray, *, n_components: int = N_COMPONENTS) -> npt.NDArray:
+    def fit_transform(
+        self, x: npt.NDArray, *, n_components: int = N_COMPONENTS
+    ) -> npt.NDArray:
         raise NotImplementedError
