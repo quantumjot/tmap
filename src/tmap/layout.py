@@ -12,7 +12,7 @@ class SpectralLayout(LayoutBase):
         pass
 
     def fit_transform(self, x, *, n_components: int = 2):
-        model = SpectralEmbedding(n_components=n_components, n_neighbors=x.shape[-1])
+        model = SpectralEmbedding(n_components=n_components) #, n_neighbors=x.shape[-1])
         return model.fit_transform(x)
 
 

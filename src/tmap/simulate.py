@@ -37,15 +37,15 @@ def simulate_trajectories(
         return _traj
 
     # first some undamped oscillators
-    for _ in range(10):
+    for _ in range(n):
         trajectories += [high_d_trajectory(t, mu=0)]
 
     # now some damped oscillators
-    for _ in range(10):
+    for _ in range(n):
         trajectories += [high_d_trajectory(t, mu=0.1)]
 
     # now some low amplitude undamped oscillators
-    for _ in range(10):
+    for _ in range(n):
         trajectories += [high_d_trajectory(t, mu=0, x_0=0.1)]
 
     return trajectories

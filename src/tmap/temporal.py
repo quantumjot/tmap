@@ -29,8 +29,24 @@ def masked_path(paths, best_path) -> npt.NDArray:
     return masked
 
 
+def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
+    """Calculate the intra sequence feature distance.
+    
+    Assumes that the inter-node distance should be based on the equivalent 
+    feature distance between the nodes. Calculated based on the distance 
+    function used for DTW to compare sequences. The final node has an infinte
+    distance to prevent linking between sequences.
+    
+    """
+    norm_delta_sq = np.linalg.norm(np.diff(seq, axis=0), 2, axis=1) ** 2
+    dist = norm_delta_sq.tolist() + [np.inf]
+    assert len(dist) == seq.shape[0]
+    return dist
+
+
+
 def calculate_distance_matrix(
-    sequences: List[np.ndarray], window: Optional[int] = None
+    sequences: List[npt.NDArray], window: Optional[int] = None
 ) -> npt.NDArray:
     """Calculate the distance matrix.
 
@@ -67,7 +83,7 @@ def calculate_distance_matrix(
             distance_matrix[sx, sy] = mask
 
     # TODO(arl): should consider the local connectivity of the trajectory too
-    local = [[0.1] * (len(sequences[i]) - 1) + [np.inf] for i in range(len(sequences))]
+    local = [intra_sequence_feature_dist(seq) for seq in sequences]
     distance_matrix[np.eye(n, k=1).astype(bool)] = np.concatenate(local)[:-1]
 
     # now make the matrix symmetric
@@ -79,8 +95,8 @@ def calculate_distance_matrix(
 
 
 def high_dimensional_probability(d: npt.NDArray, sigma: float) -> npt.NDArray:
-    # d = np.clip(d, 0.0, np.inf)  # clamp to greater than zero
-    d = np.abs(d)
+    d = np.clip(d, 0.0, np.inf)  # clamp to greater than zero
+    # d = np.abs(d)
     assert sigma > 0.0
     return np.exp(-d / sigma)
 
@@ -99,7 +115,7 @@ def estimate_sigma(
 
     def k_of_sigma(sigma):
         prob = high_dimensional_probability(d, sigma)
-        return np.power(2, np.sum(prob))
+        return np.power(2, np.clip(np.sum(prob), 0, 31.0))
 
     sigma_lower_estimate = 0.0
     sigma_upper_estimate = 1000.0
@@ -271,7 +287,7 @@ class TemporalMAP(base.MapperBase):
 
     def calculate_distance_matrix(
         self,
-        sequences: List[np.ndarray],
+        sequences: List[npt.NDArray],
     ) -> npt.NDArray:
         """Calculate the distance matrix."""
         self._distance_matrix = calculate_distance_matrix(sequences, window=self.window)
@@ -279,7 +295,7 @@ class TemporalMAP(base.MapperBase):
 
     def fit(
         self,
-        sequences: List[np.ndarray],
+        sequences: List[npt.NDArray],
         learning_rate: float = base.LEARNING_RATE,
         max_iterations: int = base.MAX_ITERATIONS,
     ) -> npt.NDArray:

@@ -18,6 +18,7 @@ def plot_embeddings(
     ax: Axes | None = None,
     show_flow: bool = True,
     title: str = "tmap",
+    cmap: str = "RdBu",
 ) -> None:
     """Plot the embeddings.
 
@@ -33,6 +34,8 @@ def plot_embeddings(
         Whether to show the flow field.
     title : str
         The title of the plot.
+    cmap : str 
+        A colormap for the trajectories.
 
     Returns
     -------
@@ -70,7 +73,7 @@ def plot_embeddings(
             max_radius=50 * dx,
         )
 
-    for traj in mapper.trajectories:
+    for idx, traj in enumerate(mapper.trajectories):
         x, y = traj[:, 0], traj[:, 1]
         points = np.array([x, y]).T.reshape(-1, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
@@ -79,7 +82,7 @@ def plot_embeddings(
         # this should probably be adjusted to absolute time
         dydx = np.linspace(0, 1, len(x))
         norm = plt.Normalize(dydx.min(), dydx.max())
-        lc = LineCollection(segments, cmap="RdBu", norm=norm)
+        lc = LineCollection(segments, cmap=cmap, norm=norm)
         lc.set_array(dydx)
         lc.set_linewidth(2)
         line = ax.add_collection(lc)
