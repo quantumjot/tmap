@@ -5,28 +5,12 @@ import jax.numpy as jnp
 import numpy as np
 import numpy.typing as npt
 import umap
-from dtaidistance import dtw, dtw_ndim
+
 from scipy import optimize
 from tqdm import tqdm
 
 from tmap import base, layout
-
-
-def masked_path(paths, best_path) -> npt.NDArray:
-    """Calculate the adjacency matrix in high dimensional space.
-
-    Parameters
-    ----------
-
-    Returns
-    -------
-    """
-    i, j = zip(*best_path)
-    paths = paths[1:, 1:]
-    masked = np.ones(paths.shape) * 0
-    dpath = paths[i, j]  # - np.concatenate([[0,], paths[i, j]])[:-1]
-    masked[i, j] = dpath
-    return masked
+from tmap.alignment import DTWAlignment, OTAlignment
 
 
 def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
@@ -44,40 +28,37 @@ def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
     return dist
 
 
-
 def calculate_distance_matrix(
-    sequences: List[npt.NDArray], window: Optional[int] = None
+    sequences: List[npt.NDArray], aligner: base.AlignmentBase,
 ) -> npt.NDArray:
     """Calculate the distance matrix.
 
     Parameters
     ----------
+    sequences : 
+    aligner :
 
 
     Returns
     -------
-
+    distance_matrix :
+        An array representing the distance matrix between all pairs of sequences in the input.
 
     Notes
     -----
     This could be a sparse matrix in practice.
     """
+
     seq_shapes = [s.shape[0] for s in sequences]
-
     n = sum(seq_shapes)
+    distance_matrix = np.zeros((n, n), dtype=np.float32)
 
-    distance_matrix = np.ones((n, n), dtype=np.float32) * 0
-
-    for i in tqdm(range(len(sequences)), desc="DTW"):
+    for i in tqdm(range(len(sequences)), desc=aligner.name):
         for j in range(i + 1, len(sequences)):
 
-            s1, s2 = sequences[i], sequences[j]
-
-            _, paths = dtw_ndim.warping_paths(s1, s2, window=window)
-            best_path = dtw.best_path(paths)
-
-            mask = masked_path(paths, best_path)
-
+            seq_i, seq_j = sequences[i], sequences[j]
+            mask = aligner(seq_i, seq_j)
+            
             sx = slice(sum(seq_shapes[:i]), sum(seq_shapes[: i + 1]), 1)
             sy = slice(sum(seq_shapes[:j]), sum(seq_shapes[: j + 1]), 1)
             distance_matrix[sx, sy] = mask
@@ -117,8 +98,8 @@ def estimate_sigma(
         prob = high_dimensional_probability(d, sigma)
         return np.power(2, np.clip(np.sum(prob), 0, 31.0))
 
-    sigma_lower_estimate = 0.0
-    sigma_upper_estimate = 1000.0
+    sigma_lower_estimate = base.SIGMA_LOW_ESTIMATE
+    sigma_upper_estimate = base.SIGMA_HIGH_ESTIMATE
 
     for _ in range(iterations):
         sigma_estimate = (sigma_lower_estimate + sigma_upper_estimate) / 2
@@ -267,12 +248,13 @@ class TemporalMAP(base.MapperBase):
 
     def __init__(
         self,
+        *,
         n_neighbors: int = base.N_NEIGHBORS,
         min_dist: float = base.MIN_DIST,
         n_components: int = base.N_COMPONENTS,
         window: Optional[int] = None,
         layout: layout.InitialLayout = layout.InitialLayout.SPECTRAL,
-        distance_fn: Callable = dtw_ndim.warping_paths,
+        aligner: Optional[base.AlignmentBase] = None
     ):
         self.n_neighbors = n_neighbors
         self.min_dist = min_dist
@@ -285,12 +267,16 @@ class TemporalMAP(base.MapperBase):
         self._distance_matrix = None
         self._layout = layout
 
+        # Default to DTW
+        self.aligner = DTWAlignment(window=window) if aligner is None else aligner
+
+
     def calculate_distance_matrix(
         self,
         sequences: List[npt.NDArray],
     ) -> npt.NDArray:
         """Calculate the distance matrix."""
-        self._distance_matrix = calculate_distance_matrix(sequences, window=self.window)
+        self._distance_matrix = calculate_distance_matrix(sequences, self.aligner)
         return self._distance_matrix
 
     def fit(
@@ -337,8 +323,6 @@ class TemporalMAP(base.MapperBase):
         np.random.seed(123)
         x = np.concatenate(sequences, axis=0)
         y = self._layout(x, n_components=self.n_components)
-        print(y.shape)
-
         grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
         loss = np.inf
 

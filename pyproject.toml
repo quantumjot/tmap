@@ -28,6 +28,7 @@ dependencies = [
     "jax",
     "matplotlib",
     "numpy",
+    "ott-jax",
     "pandas",
     "scikit-image",
     "scikit-learn",

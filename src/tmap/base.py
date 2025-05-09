@@ -9,6 +9,8 @@ N_COMPONENTS = 2
 MIN_DIST = 0.01
 LEARNING_RATE = 1e-1
 MAX_ITERATIONS = 200
+SIGMA_LOW_ESTIMATE = 0.0
+SIGMA_HIGH_ESTIMATE = 1000.0
 
 
 class MapperBase(abc.ABC):
@@ -64,4 +66,16 @@ class LayoutBase(abc.ABC):
     def fit_transform(
         self, x: npt.NDArray, *, n_components: int = N_COMPONENTS
     ) -> npt.NDArray:
+        raise NotImplementedError
+    
+
+class AlignmentBase(abc.ABC):
+
+    @abc.abstractmethod 
+    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray) -> npt.NDArray:
+        raise NotImplementedError
+    
+    @property
+    @abc.abstractmethod
+    def name(self) -> str:
         raise NotImplementedError
