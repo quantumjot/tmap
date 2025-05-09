@@ -3,7 +3,7 @@ Temporal UMAP
 
 **WORK IN PROGRESS**
 
-![output](https://github.com/user-attachments/assets/40e84aff-27a9-4c69-9055-a6b2e90b6a08)
+![output](https://github.com/user-attachments/assets/34d8fd33-3165-4f81-bdd0-c11cc71f0f41)
 
 ## installation
 
