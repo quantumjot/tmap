@@ -9,8 +9,13 @@ import umap
 from scipy import optimize
 from tqdm import tqdm
 
-from tmap import base, layout
+from tmap import base
 from tmap.alignment import DTWAlignment, OTAlignment
+from tmap.layout import InitialLayout
+
+
+# set a default random seed
+np.random.seed(123)
 
 
 def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
@@ -29,19 +34,22 @@ def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
 
 
 def calculate_distance_matrix(
-    sequences: List[npt.NDArray], aligner: base.AlignmentBase,
+    sequences: List[npt.NDArray], aligner: base.AlignmentBase, *, mask: bool = True,
 ) -> npt.NDArray:
     """Calculate the distance matrix.
 
     Parameters
     ----------
-    sequences : 
-    aligner :
-
+    sequences : list
+        The sequences to align and calculate the distance matrix.
+    aligner : AlignmentBase 
+        An alignment method to construct the sparse distance graph.
+    mask : bool
+        Whether to mask the transport plan to the optimal path.
 
     Returns
     -------
-    distance_matrix :
+    distance_matrix : array
         An array representing the distance matrix between all pairs of sequences in the input.
 
     Notes
@@ -53,17 +61,28 @@ def calculate_distance_matrix(
     n = sum(seq_shapes)
     distance_matrix = np.zeros((n, n), dtype=np.float32)
 
-    for i in tqdm(range(len(sequences)), desc=aligner.name):
+    for i in tqdm(range(len(sequences)), desc=aligner.name+f" (masking={mask})"):
         for j in range(i + 1, len(sequences)):
 
             seq_i, seq_j = sequences[i], sequences[j]
-            mask = aligner(seq_i, seq_j)
+            alignment_output = aligner(seq_i, seq_j, mask=mask).astype(np.float32)
             
             sx = slice(sum(seq_shapes[:i]), sum(seq_shapes[: i + 1]), 1)
             sy = slice(sum(seq_shapes[:j]), sum(seq_shapes[: j + 1]), 1)
-            distance_matrix[sx, sy] = mask
 
-    # TODO(arl): should consider the local connectivity of the trajectory too
+            if isinstance(aligner, OTAlignment):
+                # for OT, output is a weighted transport plan (correspondence)
+                distances = 1.0 / (alignment_output + 1e-9)
+                distance_matrix[sx, sy] = distances
+            elif isinstance(aligner, DTWAlignment):
+                # for DTW, the output is the cost matrix, which is already a
+                # distance matrix (low cost = low distance), so we can use it directly
+                distance_matrix[sx, sy] = alignment_output
+            else:
+                distance_matrix[sx, sy] = alignment_output
+
+
+    # consider the local connectivity of the trajectory too
     local = [intra_sequence_feature_dist(seq) for seq in sequences]
     distance_matrix[np.eye(n, k=1).astype(bool)] = np.concatenate(local)[:-1]
 
@@ -234,10 +253,12 @@ class TemporalMAP(base.MapperBase):
     window : int, None
         The window used by the dynamic time warping function. Balances
         local temporal features vs global trajectory warping.
-    pre_embedding_fn : Callable
-        A function to initialize the embedding in low dimensional space
-    distance_fn : Callable
-        A function to calculate the distances in sequence space.
+    layout : str, InitialLayout 
+        The initial layout methods, defaults to spectral embedding.
+    aligner : AlignmentBase 
+        An alignment method to construct the sparse distance graph.
+    mask : bool
+        Whether to mask the transport plan to the optimal path.
 
     Attributes
     ----------
@@ -253,22 +274,36 @@ class TemporalMAP(base.MapperBase):
         min_dist: float = base.MIN_DIST,
         n_components: int = base.N_COMPONENTS,
         window: Optional[int] = None,
-        layout: layout.InitialLayout = layout.InitialLayout.SPECTRAL,
-        aligner: Optional[base.AlignmentBase] = None
+        layout: InitialLayout | base.LayoutBase | str = "SPECTRAL",
+        aligner: Optional[base.AlignmentBase] = None,
+        mask: bool = True,
     ):
         self.n_neighbors = n_neighbors
         self.min_dist = min_dist
         self.n_components = n_components
         self.window = window
+        self.mask = mask
 
         self._sequences = []
         self._P = None
         self._embedding = None
         self._distance_matrix = None
-        self._layout = layout
 
-        # Default to DTW
+
+        # set the initial layout method
+        self._set_initial_layout_method(layout)
+
+        # default to DTW for alignment
         self.aligner = DTWAlignment(window=window) if aligner is None else aligner
+
+    def _set_initial_layout_method(self, layout: InitialLayout | base.LayoutBase | str) -> None:
+        """Set the initial layout method"""
+        if isinstance(layout, str):
+            self._layout = InitialLayout[layout.upper()]
+        elif isinstance(layout, (InitialLayout, base.LayoutBase)):
+            self._layout = layout
+        else:
+            raise TypeError(f"Layout method not recognized: {layout}")
 
 
     def calculate_distance_matrix(
@@ -276,7 +311,7 @@ class TemporalMAP(base.MapperBase):
         sequences: List[npt.NDArray],
     ) -> npt.NDArray:
         """Calculate the distance matrix."""
-        self._distance_matrix = calculate_distance_matrix(sequences, self.aligner)
+        self._distance_matrix = calculate_distance_matrix(sequences, self.aligner, mask=self.mask)
         return self._distance_matrix
 
     def fit(
@@ -319,10 +354,7 @@ class TemporalMAP(base.MapperBase):
         )
 
         a, b = find_hyperparameters(self.min_dist)
-
-        np.random.seed(123)
-        x = np.concatenate(sequences, axis=0)
-        y = self._layout(x, n_components=self.n_components)
+        y = self._layout(sequences, n_components=self.n_components)
         grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
         loss = np.inf
 

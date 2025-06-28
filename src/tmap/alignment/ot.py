@@ -19,14 +19,14 @@ class OTAlignment(base.AlignmentBase):
         self.epsilon = epsilon
         self.sinkhorn_threshold = sinkhorn_threshold
 
-    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray) -> npt.NDArray:
+    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray, *, mask: bool = True):
         x = jnp.array(sequence_i, dtype=jnp.float32) 
         y = jnp.array(sequence_j, dtype=jnp.float32)
         geom = pointcloud.PointCloud(x, y, epsilon=self.epsilon)
 
         # Uniform marginal distributions for the two trajectories
-        p_x = jnp.ones(x.shape[0]) / x.shape[0]
-        p_y = jnp.ones(y.shape[0]) / y.shape[0]
+        p_x = jnp.ones(x.shape[0], dtype=jnp.float32) / x.shape[0]
+        p_y = jnp.ones(y.shape[0], dtype=jnp.float32) / y.shape[0]
         ot_problem = linear_problem.LinearProblem(geom, p_x, p_y)
 
         # Solve it using the Sinkhorn solver
@@ -35,7 +35,9 @@ class OTAlignment(base.AlignmentBase):
         
         # Get the optimal transport plan
         transport_plan = np.asarray(ot_solution.matrix)
-        # mask = masked_path_from_transport_plan_argmax(transport_plan)
+
+        if not mask:
+            return transport_plan
         mask = masked_path_from_transport_plan_LAP(transport_plan)
         return mask
 

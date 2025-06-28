@@ -14,8 +14,12 @@ class DTWAlignment(base.AlignmentBase):
     def __init__(self, *, window: Optional[int] = None):
         self.window = window
 
-    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray) -> npt.NDArray:
+    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray, *, mask: bool = True) -> npt.NDArray:
         _, paths = dtw_ndim.warping_paths(sequence_i, sequence_j, window=self.window)
+
+        if not mask:
+            return paths[1:, 1:]
+        
         best_path = dtw.best_path(paths)
         mask = masked_path_from_DTW(paths, best_path)
         return mask

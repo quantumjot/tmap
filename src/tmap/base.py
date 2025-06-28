@@ -61,10 +61,13 @@ class LayoutBase(abc.ABC):
 
     def __call__(self, *args, **kwargs):
         return self.fit_transform(*args, **kwargs)
+    
+    def _concatenate_sequences(self, sequences: list[npt.NDArray]) -> npt.NDArray:
+        return np.concatenate(sequences, axis=0)
 
     @abc.abstractmethod
     def fit_transform(
-        self, x: npt.NDArray, *, n_components: int = N_COMPONENTS
+        self, sequences: list[npt.NDArray], *, n_components: int = N_COMPONENTS
     ) -> npt.NDArray:
         raise NotImplementedError
     
@@ -72,7 +75,7 @@ class LayoutBase(abc.ABC):
 class AlignmentBase(abc.ABC):
 
     @abc.abstractmethod 
-    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray) -> npt.NDArray:
+    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray, *, mask: bool = True) -> npt.NDArray:
         raise NotImplementedError
     
     @property
