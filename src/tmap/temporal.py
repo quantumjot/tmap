@@ -304,6 +304,28 @@ class TemporalMAP(base.MapperBase):
             self._layout = layout
         else:
             raise TypeError(f"Layout method not recognized: {layout}")
+        
+    def _initialize(self, sequences: List[npt.NDArray]) -> tuple[npt.NDArray, float, float]:
+        """Initialize the parameters of the fit"""
+        for seq in sequences:
+            if not isinstance(seq, np.ndarray):
+                raise TypeError("Trajectories should be numpy arrays")
+            if seq.shape[-1] < self.n_components:
+                raise ValueError("Trajectories should be high dimensional")
+
+        self._sequences = sequences
+
+        if self.distance_matrix is None:
+            _ = self.calculate_distance_matrix(sequences)
+
+        prob = calculate_high_dimensional_probability_matrix(
+            self.distance_matrix, self.n_neighbors
+        )
+
+        self._P = prob
+
+        a, b = find_hyperparameters(self.min_dist)
+        return prob, a, b
 
 
     def calculate_distance_matrix(
@@ -338,22 +360,8 @@ class TemporalMAP(base.MapperBase):
             The embedding in `n_components` dimensions.
         """
 
-        for seq in sequences:
-            if not isinstance(seq, np.ndarray):
-                raise TypeError("Trajectories should be numpy arrays")
-            if seq.shape[-1] < self.n_components:
-                raise ValueError("Trajectories should be high dimensional")
+        prob, a, b = self._initialize(sequences)
 
-        self._sequences = sequences
-
-        if self.distance_matrix is None:
-            _ = self.calculate_distance_matrix(sequences)
-
-        prob = calculate_high_dimensional_probability_matrix(
-            self.distance_matrix, self.n_neighbors
-        )
-
-        a, b = find_hyperparameters(self.min_dist)
         y = self._layout(sequences, n_components=self.n_components)
         grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
         loss = np.inf
