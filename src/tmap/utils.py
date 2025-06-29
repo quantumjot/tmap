@@ -17,6 +17,8 @@ def plot_embeddings(
     fig: Figure | None = None,
     ax: Axes | None = None,
     show_flow: bool = True,
+    show_labels: bool = False,
+    show_markers: bool = True,
     title: str = "tmap",
     cmap: str = "RdBu",
 ) -> None:
@@ -32,6 +34,10 @@ def plot_embeddings(
         [optional] An instance of a matplotlib axes
     show_flow : bool
         Whether to show the flow field.
+    show_labels : bool
+        Whether to show sequence ID markers.
+    show_markers : bool
+        Whether to show points representing the individual data points.
     title : str
         The title of the plot.
     cmap : str 
@@ -47,7 +53,8 @@ def plot_embeddings(
     if fig is None:
         fig, ax = plt.subplots()
 
-    ax.plot(mapper.embeddings[:, 0], mapper.embeddings[:, 1], "k.")
+    if show_markers:
+        ax.plot(mapper.embeddings[:, 0], mapper.embeddings[:, 1], "k.")
 
     if show_flow:
         xx, yy = np.meshgrid(
@@ -87,6 +94,13 @@ def plot_embeddings(
         lc.set_linewidth(2)
         line = ax.add_collection(lc)
 
+        if show_labels:
+            j = x.shape[0] // 2
+            xc, yc = x[j], y[j]
+            ax.annotate(f"{idx}", xy=(xc, yc),
+                bbox=dict(boxstyle="circle,pad=0.3", fc="white", ec="black", lw=2)
+            )
+
     if show_flow:
         ax.quiver(
             grid[:, 0],
@@ -97,13 +111,13 @@ def plot_embeddings(
             scale_units="xy",
             scale=2,
             color="k",
-            zorder=1000,
+            zorder=-1000,
         )
 
     cbar = fig.colorbar(line, ax=ax)
     cbar.set_label("Time", rotation=270)
     ax.set_title(
-        f"{title} | n_neighbors: {mapper.n_neighbors}, min_dist: {mapper.min_dist}, window: {mapper.window}"
+        f"{title} | n_neighbors: {mapper.n_neighbors}, min_dist: {mapper.min_dist}"
     )
 
 
