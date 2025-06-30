@@ -55,9 +55,14 @@ def plot_embeddings(
     -------
     None
     """
+
+    # silently return if there are issues here
     if np.isnan(mapper.embeddings[0, 0]) or mapper.embeddings is None:
-        return
+        raise ValueError("Cannot plot embeddings.")
     
+    if mapper.n_components not in PlotDimensionality._value2member_map_:
+        raise ValueError(f"Too many components to plot: {mapper.n_components}")
+
     # set the plot dimensionality specifics
     if mapper.n_components == PlotDimensionality.THREE:
         subplot_kwargs = {"projection": "3d"}
@@ -77,6 +82,7 @@ def plot_embeddings(
     if ax is None:
         ax = fig.add_subplot(111, **subplot_kwargs)
 
+    # split the embeddings by component
     embeddings = np.hsplit(mapper.embeddings, mapper.n_components)
 
     if show_markers:
@@ -110,8 +116,7 @@ def plot_embeddings(
         )
 
     for idx, traj in enumerate(mapper.trajectories):
-        # print(traj.shape)
-        # points = np.array(np.hsplit(traj, mapper.n_components)).T.reshape(-1, 1, mapper.n_components)
+        # get the points and segments
         points = traj[:, None, :]
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
 
@@ -124,6 +129,7 @@ def plot_embeddings(
         lc.set_linewidth(2)
         line = ax.add_collection(lc)
 
+        # show markers at the midpoint of the trajectory
         if show_labels:
             j = traj.shape[0] // 2
             centroid = tuple(traj[j, ...].tolist())
@@ -160,7 +166,6 @@ def vectors_from_tracks(
 
     vectors = []
     for track_arr in trajectories:
-        # track_arr = np.stack(track_data, axis=-1)
         t = np.arange(0, track_arr.shape[0])[:, None]
         track_arr = np.concatenate(
             [t, track_arr],
