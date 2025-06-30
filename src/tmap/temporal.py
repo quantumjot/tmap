@@ -381,10 +381,17 @@ class TemporalMAP(base.MapperBase):
 class DefaultUMAP(base.MapperBase):
     """Simple wrapper around UMAP to provide comparison with TMAP"""
 
-    def __init__(self, *, min_dist: int = base.MIN_DIST, n_neighbors: int = 1):
+    def __init__(
+        self, 
+        *, 
+        min_dist: int = base.MIN_DIST, 
+        n_neighbors: int = 1, 
+        n_components: int = base.N_COMPONENTS
+    ):
         self._umap = umap.UMAP()
         self.min_dist = min_dist
         self.n_neighbors = n_neighbors
+        self.n_components = n_components
         self.window = None
 
     def fit(self, sequences):
