@@ -17,17 +17,18 @@ classifiers = [
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python",
     "Topic :: Scientific/Engineering :: Visualization",
 ]
+
 dependencies = [
     "dtaidistance",
     "jax",
     "matplotlib",
     "numpy",
+    "ott-jax",
     "pandas",
     "scikit-image",
     "scikit-learn",
@@ -35,6 +36,7 @@ dependencies = [
     "tqdm",
     "umap-learn",
 ]
+
 description = "Temporal UMAP"
 dynamic = [
     "version",
@@ -44,3 +46,23 @@ readme = "README.md"
 requires-python = ">=3.8"
 license.file = "LICENCE.md"
 urls.homepage = "https://github.com/quantumjot/tmap"
+
+[project.optional-dependencies]
+dev = [
+    "ruff >= 0.0.61",
+    "black >= 23.3.0",
+    "pytest >= 7.1.2",
+]
+
+[tool.ruff]
+# Ruff configuration (optional, but recommended)
+lint.select = ["E", "W", "F", "I", "C"] # Enable error, warning, and style checks
+lint.ignore = ["E501"]  # Ignore line length errors, if you prefer
+
+[tool.black]
+# Black configuration
+line-length = 88
+target-version = ['py310', 'py311', 'py312'] # Target Python versions
+
+[tool.pytest]
+# Pytest configuration

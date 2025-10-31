@@ -1,85 +1,94 @@
+from typing import Callable, List, Optional
+
+import jax
+import jax.numpy as jnp
 import numpy as np
 import numpy.typing as npt
 import umap
 
-from dtaidistance import dtw, dtw_ndim
-
 from scipy import optimize
-from sklearn.manifold import SpectralEmbedding
 from tqdm import tqdm
-from typing import Callable, List, Optional
 
-from jax import grad, jit
-import jax.numpy as jnp
-
-from tmap.base import MapperBase
+from tmap import base
+from tmap.alignment import DTWAlignment, OTAlignment
+from tmap.layout import InitialLayout
 
 
-EPSILON_WEIGHT = np.inf
-N_NEIGHBORS = 15
-MIN_DIST = 0.25
-LEARNING_RATE = 1e-3
-MAX_ITERATIONS = 200
-LATEN_DIMS = 32
+# set a default random seed
+np.random.seed(123)
 
 
-def masked_path(paths, best_path) -> npt.NDArray:
-    """Calculate the adjacency matrix in high dimensional space.
-
-    Parameters
-    ----------
-
-    Returns
-    -------
+def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
+    """Calculate the intra sequence feature distance.
+    
+    Assumes that the inter-node distance should be based on the equivalent 
+    feature distance between the nodes. Calculated based on the distance 
+    function used for DTW to compare sequences. The final node has an infinte
+    distance to prevent linking between sequences.
+    
     """
-    i, j = zip(*best_path)
-    paths = paths[1:, 1:]
-    masked = np.ones(paths.shape) * 0
-    dpath = paths[i, j]  # - np.concatenate([[0,], paths[i, j]])[:-1]
-    masked[i, j] = dpath
-    return masked
+    norm_delta_sq = np.linalg.norm(np.diff(seq, axis=0), 2, axis=1) ** 2
+    dist = norm_delta_sq.tolist() + [np.inf]
+    assert len(dist) == seq.shape[0]
+    return dist
 
 
 def calculate_distance_matrix(
-    sequences: List[np.ndarray], window: Optional[int] = None
+    sequences: List[npt.NDArray], aligner: base.AlignmentBase, *, mask: bool = True,
 ) -> npt.NDArray:
     """Calculate the distance matrix.
 
     Parameters
     ----------
-
+    sequences : list
+        The sequences to align and calculate the distance matrix.
+    aligner : AlignmentBase 
+        An alignment method to construct the sparse distance graph.
+    mask : bool
+        Whether to mask the transport plan to the optimal path.
 
     Returns
     -------
-
+    distance_matrix : array
+        An array representing the distance matrix between all pairs of sequences in the input.
 
     Notes
     -----
     This could be a sparse matrix in practice.
     """
+
     seq_shapes = [s.shape[0] for s in sequences]
-
     n = sum(seq_shapes)
+    distance_matrix = np.zeros((n, n), dtype=np.float32)
 
-    distance_matrix = np.ones((n, n), dtype=np.float32) * 0
-
-    for i in tqdm(range(len(sequences)), desc="DTW"):
+    for i in tqdm(range(len(sequences)), desc=aligner.name+f" (masking={mask})"):
         for j in range(i + 1, len(sequences)):
 
-            s1, s2 = sequences[i], sequences[j]
-
-            _, paths = dtw_ndim.warping_paths(s1, s2, window=window)
-            best_path = dtw.best_path(paths)
-
-            mask = masked_path(paths, best_path)
-
+            seq_i, seq_j = sequences[i], sequences[j]
+            alignment_output = aligner(seq_i, seq_j, mask=mask).astype(np.float32)
+            
             sx = slice(sum(seq_shapes[:i]), sum(seq_shapes[: i + 1]), 1)
             sy = slice(sum(seq_shapes[:j]), sum(seq_shapes[: j + 1]), 1)
-            distance_matrix[sx, sy] = mask
+
+            if isinstance(aligner, OTAlignment):
+                # for OT, output is a weighted transport plan (correspondence)
+                distances = 1.0 / (alignment_output + 1e-9)
+                distance_matrix[sx, sy] = distances
+            elif isinstance(aligner, DTWAlignment):
+                # for DTW, the output is the cost matrix, which is already a
+                # distance matrix (low cost = low distance), so we can use it directly
+                distance_matrix[sx, sy] = alignment_output
+            else:
+                distance_matrix[sx, sy] = alignment_output
+
+
+    # consider the local connectivity of the trajectory too
+    local = [intra_sequence_feature_dist(seq) for seq in sequences]
+    distance_matrix[np.eye(n, k=1).astype(bool)] = np.concatenate(local)[:-1]
 
     # now make the matrix symmetric
     distance_matrix = distance_matrix + distance_matrix.T
-    distance_matrix[distance_matrix == 0] = EPSILON_WEIGHT
+    distance_matrix[distance_matrix == 0] = base.EPSILON_WEIGHT
     distance_matrix[np.eye(n).astype(bool)] = 0.0
 
     return distance_matrix
@@ -87,6 +96,7 @@ def calculate_distance_matrix(
 
 def high_dimensional_probability(d: npt.NDArray, sigma: float) -> npt.NDArray:
     d = np.clip(d, 0.0, np.inf)  # clamp to greater than zero
+    # d = np.abs(d)
     assert sigma > 0.0
     return np.exp(-d / sigma)
 
@@ -103,19 +113,23 @@ def estimate_sigma(
     -------
     """
 
-    k = lambda p: np.power(2.0, np.sum(p))
-    k_of_sigma = lambda sigma: k(high_dimensional_probability(d, sigma))
+    def k_of_sigma(sigma):
+        prob = high_dimensional_probability(d, sigma)
+        return np.power(2, np.clip(np.sum(prob), 0, 31.0))
 
-    sigma_lower_estimate = np.float128(0.0)
-    sigma_upper_estimate = np.float128(1000.0)
+    sigma_lower_estimate = base.SIGMA_LOW_ESTIMATE
+    sigma_upper_estimate = base.SIGMA_HIGH_ESTIMATE
 
-    for iter in range(iterations):
+    for _ in range(iterations):
         sigma_estimate = (sigma_lower_estimate + sigma_upper_estimate) / 2
-        if k_of_sigma(sigma_estimate) < n_neighbors:
+        k_sigma_estimate = k_of_sigma(sigma_estimate)
+
+        if k_sigma_estimate < n_neighbors:
             sigma_lower_estimate = sigma_estimate
         else:
             sigma_upper_estimate = sigma_estimate
-        if np.abs(n_neighbors - k_of_sigma(sigma_estimate)) <= tolerance:
+
+        if np.abs(n_neighbors - k_sigma_estimate) <= tolerance:
             break
 
     return sigma_estimate
@@ -140,7 +154,7 @@ def calculate_high_dimensional_probability_matrix(
 
     # calculate the minimum (non-zero) distance for each row
     rho = [sorted(dist[i])[1] for i in range(dist.shape[0])]
-    prob = np.zeros_like(dist, dtype=np.float32)
+    prob = np.zeros_like(dist, dtype=np.float64)
 
     for row in range(prob.shape[0]):
         d = dist[row, ...] - rho[row]
@@ -149,7 +163,6 @@ def calculate_high_dimensional_probability_matrix(
 
     # make the distances compatible by enforcing symmetry
     prob = symmetrize_probability_matrix_umap(prob)
-
     return prob
 
 
@@ -171,33 +184,23 @@ def find_hyperparameters(min_dist: float):
     a : float
     b : float
     """
-
-    # return 1.0, 1.0
-
-    x = np.linspace(0, 3, 300)
+    x = np.linspace(0.0, 3.0, 300, dtype=np.float64)
 
     def f(x, min_dist):
-        y = []
-        for i in range(len(x)):
-            if x[i] <= min_dist:
-                y.append(1)
-            else:
-                y.append(np.exp(-x[i] + min_dist))
+        y = np.exp(-x + min_dist)
+        y[x <= min_dist] = 1.0
         return y
 
     dist_low_dim = lambda x, a, b: 1 / (1 + a * x ** (2 * b))
-
     p, _ = optimize.curve_fit(dist_low_dim, x, f(x, min_dist))
-
-    a = p[0]
-    b = p[1]
-
+    a, b = p
     return a, b
 
 
-@jit
+@jax.jit
 def jax_euclidean_distances(i, j):
-    """
+    """Calculate the Euclidean distances between two arrays.
+
     Parameters
     ----------
 
@@ -209,38 +212,13 @@ def jax_euclidean_distances(i, j):
     I_dots = jnp.reshape(jnp.sum((i * i), axis=1), (M, 1)) * jnp.ones(shape=(1, N))
     J_dots = jnp.sum((j * j), axis=1) * jnp.ones(shape=(M, 1))
     D_squared = I_dots + J_dots - 2 * jnp.dot(i, j.T)
-    return D_squared
+    return jnp.maximum(0.0, D_squared)
 
 
-@jit
-def jax_inverse_dist(a, b, d_squared):
-    """
-    Parameters
-    ----------
+@jax.jit
+def jax_cross_entropy_gradient_2(p, y, a, b, *, eps: float = 1e-8):
+    """Calculate the BCE gradient.
 
-    Returns
-    -------
-    """
-    return jnp.power(1.0 + a * jnp.power(d_squared, b), -1)
-
-
-@jit
-def jax_cross_entropy(p, y, a, b):
-    """
-    Parameters
-    ----------
-
-    Returns
-    -------
-    """
-    d_squared = jax_euclidean_distances(y, y)
-    q = jax_inverse_dist(a, b, d_squared)
-    return -p * jnp.log(q + 0.01) - (1 - p) * jnp.log(1 - q + 0.01)
-
-
-@jit
-def jax_cross_entropy_gradient(p, y, a, b):
-    """
     Parameters
     ----------
 
@@ -249,16 +227,16 @@ def jax_cross_entropy_gradient(p, y, a, b):
     """
     n = y.shape[0]
     d = jax_euclidean_distances(y, y)
-    y_diff = jnp.expand_dims(y, 1) - jnp.expand_dims(y, 0)
-    inv_dist = jnp.power(1 + a * d**b, -1)
-    q = jnp.dot(1 - p, jnp.power(0.001 + d, -1))
-    q = q * (1 - jnp.identity(n))
-    q = q / jnp.sum(q, axis=1, keepdims=True)
-    fact = jnp.expand_dims(a * p * (1e-8 + d) ** (b - 1) - q, 2)
-    return 2 * b * jnp.sum(fact * y_diff * jnp.expand_dims(inv_dist, 2), axis=1)
+    w = jnp.power(1.0 + a * (d + eps) ** b, -1)
+    w = w * (1 - jnp.identity(n))
+    w_sum = jnp.sum(w, axis=1, keepdims=True)
+    q = w / (w_sum + eps)
+    q = jnp.clip(q, eps, 1.0 - eps)
+    loss = -jnp.sum(p * jnp.log(q) + (1 - p) * jnp.log(1 - q))
+    return loss
 
 
-class TemporalMAP(MapperBase):
+class TemporalMAP(base.MapperBase):
     """TemporalMAP.
 
     Creates a low dimensional embedding of the input data that attempts to
@@ -272,13 +250,15 @@ class TemporalMAP(MapperBase):
         The minimum distance in the low dimensional representation.
     n_components : int (default = 2)
         The number of dimensions of the low dimensional representation.
-    window : int, None 
-        The window used by the dynamic time warping function. Balances 
+    window : int, None
+        The window used by the dynamic time warping function. Balances
         local temporal features vs global trajectory warping.
-    pre_embedding_fn : Callable
-        A function to initialize the embedding in low dimensional space
-    distance_fn : Callable
-        A function to calculate the distances in sequence space.
+    layout : str, InitialLayout 
+        The initial layout methods, defaults to spectral embedding.
+    aligner : AlignmentBase 
+        An alignment method to construct the sparse distance graph.
+    mask : bool
+        Whether to mask the transport plan to the optimal path.
 
     Attributes
     ----------
@@ -289,36 +269,78 @@ class TemporalMAP(MapperBase):
 
     def __init__(
         self,
-        n_neighbors: int = N_NEIGHBORS,
-        min_dist: float = MIN_DIST,
-        n_components: int = 2,
+        *,
+        n_neighbors: int = base.N_NEIGHBORS,
+        min_dist: float = base.MIN_DIST,
+        n_components: int = base.N_COMPONENTS,
         window: Optional[int] = None,
-        pre_embedding_fn: Callable = SpectralEmbedding,
-        distance_fn: Callable = dtw_ndim.warping_paths,
+        layout: InitialLayout | base.LayoutBase | str = "SPECTRAL",
+        aligner: Optional[base.AlignmentBase] = None,
+        mask: bool = True,
     ):
         self.n_neighbors = n_neighbors
         self.min_dist = min_dist
         self.n_components = n_components
         self.window = window
+        self.mask = mask
 
         self._sequences = []
         self._P = None
         self._embedding = None
         self._distance_matrix = None
+
+
+        # set the initial layout method
+        self._set_initial_layout_method(layout)
+
+        # default to DTW for alignment
+        self.aligner = DTWAlignment(window=window) if aligner is None else aligner
+
+    def _set_initial_layout_method(self, layout: InitialLayout | base.LayoutBase | str) -> None:
+        """Set the initial layout method"""
+        if isinstance(layout, str):
+            self._layout = InitialLayout[layout.upper()]
+        elif isinstance(layout, (InitialLayout, base.LayoutBase)):
+            self._layout = layout
+        else:
+            raise TypeError(f"Layout method not recognized: {layout}")
         
+    def _initialize(self, sequences: List[npt.NDArray]) -> tuple[npt.NDArray, float, float]:
+        """Initialize the parameters of the fit"""
+        for seq in sequences:
+            if not isinstance(seq, np.ndarray):
+                raise TypeError("Trajectories should be numpy arrays")
+            if seq.shape[-1] < self.n_components:
+                raise ValueError("Trajectories should be high dimensional")
+
+        self._sequences = sequences
+
+        if self.distance_matrix is None:
+            _ = self.calculate_distance_matrix(sequences)
+
+        prob = calculate_high_dimensional_probability_matrix(
+            self.distance_matrix, self.n_neighbors
+        )
+
+        self._P = prob
+
+        a, b = find_hyperparameters(self.min_dist)
+        return prob, a, b
+
+
     def calculate_distance_matrix(
-        self, 
-        sequences: List[np.ndarray],
+        self,
+        sequences: List[npt.NDArray],
     ) -> npt.NDArray:
         """Calculate the distance matrix."""
-        self._distance_matrix = calculate_distance_matrix(sequences, window=self.window)
+        self._distance_matrix = calculate_distance_matrix(sequences, self.aligner, mask=self.mask)
         return self._distance_matrix
-    
+
     def fit(
         self,
-        sequences: List[np.ndarray],
-        learning_rate: float = LEARNING_RATE,
-        max_iterations: int = MAX_ITERATIONS,
+        sequences: List[npt.NDArray],
+        learning_rate: float = base.LEARNING_RATE,
+        max_iterations: int = base.MAX_ITERATIONS,
     ) -> npt.NDArray:
         """
         Parameters
@@ -338,34 +360,17 @@ class TemporalMAP(MapperBase):
             The embedding in `n_components` dimensions.
         """
 
-        for seq in sequences:
-            if not isinstance(seq, np.ndarray):
-                raise TypeError("Trajectories should be numpy arrays")
-            if seq.ndim < self.n_components:
-                raise ValueError("Trajectories should be high dimensional")
+        prob, a, b = self._initialize(sequences)
 
-        self._sequences = sequences
+        y = self._layout(sequences, n_components=self.n_components)
+        grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
+        loss = np.inf
 
-        if self.distance_matrix is None:
-            _ = self.calculate_distance_matrix(sequences)
-
-        prob = calculate_high_dimensional_probability_matrix(
-            self.distance_matrix, 
-            self.n_neighbors
-        )
-
-        a, b = find_hyperparameters(self.min_dist)
-
-        np.random.seed(42)
-        X_train = np.concatenate(sequences, axis=0)
-        model = SpectralEmbedding(
-            n_components=self.n_components, n_neighbors=X_train.shape[-1]
-        )
-        y = model.fit_transform(X_train)
-
-        # now do gradient descent to find the embedding
-        for i in tqdm(range(max_iterations), desc="Embedding"):
-            y = y - learning_rate * jax_cross_entropy_gradient(prob, y, a, b)
+        embed_pbar = tqdm(range(max_iterations))
+        for _ in embed_pbar:
+            embed_pbar.set_description(f"Embedding (loss: {loss:.3f})")
+            loss, grad = grad_fn(prob, y, a, b)
+            y = y - learning_rate * grad
 
         self._embedding = y
         self._P = prob
@@ -373,12 +378,20 @@ class TemporalMAP(MapperBase):
         return y
 
 
-class DefaultUMAP(MapperBase):
+class DefaultUMAP(base.MapperBase):
     """Simple wrapper around UMAP to provide comparison with TMAP"""
-    def __init__(self, *, min_dist: int = MIN_DIST, n_neighbors: int = 1):
+
+    def __init__(
+        self, 
+        *, 
+        min_dist: int = base.MIN_DIST, 
+        n_neighbors: int = 1, 
+        n_components: int = base.N_COMPONENTS
+    ):
         self._umap = umap.UMAP()
         self.min_dist = min_dist
         self.n_neighbors = n_neighbors
+        self.n_components = n_components
         self.window = None
 
     def fit(self, sequences):
@@ -387,8 +400,8 @@ class DefaultUMAP(MapperBase):
         x = np.concatenate(self._sequences, axis=0)
 
         y = self._umap.fit_transform(
-            x, 
-            min_dist=self.min_dist, 
+            x,
+            min_dist=self.min_dist,
             n_neighbors=self.n_neighbors,
         )
 

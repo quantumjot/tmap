@@ -3,6 +3,16 @@ import abc
 import numpy as np
 import numpy.typing as npt
 
+EPSILON_WEIGHT = np.inf
+N_NEIGHBORS = 15
+N_COMPONENTS = 2
+MIN_DIST = 0.01
+LEARNING_RATE = 1e-1
+MAX_ITERATIONS = 200
+SIGMA_LOW_ESTIMATE = 0.0
+SIGMA_HIGH_ESTIMATE = 1000.0
+
+
 class MapperBase(abc.ABC):
 
     @abc.abstractmethod
@@ -29,7 +39,7 @@ class MapperBase(abc.ABC):
 
         Returns
         -------
-        trajectories : list 
+        trajectories : list
             A list of numpy arrays of the low dimensional embeddings for each
             trajectory.
         """
@@ -40,8 +50,35 @@ class MapperBase(abc.ABC):
     @property
     def distance_matrix(self) -> npt.NDArray | None:
         return self._distance_matrix
-    
-    @property 
+
+    @property
     def embeddings(self) -> npt.NDArray | None:
         """Return the embeddings"""
         return self._embedding
+
+
+class LayoutBase(abc.ABC):
+
+    def __call__(self, *args, **kwargs):
+        return self.fit_transform(*args, **kwargs)
+    
+    def _concatenate_sequences(self, sequences: list[npt.NDArray]) -> npt.NDArray:
+        return np.concatenate(sequences, axis=0)
+
+    @abc.abstractmethod
+    def fit_transform(
+        self, sequences: list[npt.NDArray], *, n_components: int = N_COMPONENTS
+    ) -> npt.NDArray:
+        raise NotImplementedError
+    
+
+class AlignmentBase(abc.ABC):
+
+    @abc.abstractmethod 
+    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray, *, mask: bool = True) -> npt.NDArray:
+        raise NotImplementedError
+    
+    @property
+    @abc.abstractmethod
+    def name(self) -> str:
+        raise NotImplementedError
