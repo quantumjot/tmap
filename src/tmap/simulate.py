@@ -1,3 +1,8 @@
+"""Simulation utilities for generating test trajectory data.
+
+This module provides functions for simulating temporal trajectories using
+physical models like damped oscillators.
+"""
 import numpy as np
 import numpy.typing as npt
 
@@ -27,10 +32,31 @@ def damped_oscillator(
 def simulate_trajectories(
     *, t: npt.NDArray = np.linspace(0, 10, 100), n: int = 10, n_components: int = 3
 ) -> list[npt.NDArray]:
+    """Generate simulated trajectories using damped oscillators.
+
+    Creates three groups of trajectories with different dynamics:
+    - Undamped oscillators
+    - Damped oscillators
+    - Low amplitude undamped oscillators
+
+    Parameters
+    ----------
+    t : npt.NDArray
+        Time points for simulation.
+    n : int
+        Number of trajectories per group.
+    n_components : int
+        Dimensionality of each trajectory.
+
+    Returns
+    -------
+    list of npt.NDArray
+        List of simulated trajectories, each of shape (len(t), n_components).
+    """
     trajectories = []
 
     def high_d_trajectory(*args, **kwargs):
-        # make a high dimensional trajectory with jittered phi
+        """Create high-dimensional trajectory with random phase jitter."""
         kwargs.update({"phi": np.random.random() * 10.0})
         _traj = np.stack([damped_oscillator(*args, **kwargs)] * n_components, axis=-1)
         assert _traj.shape == (args[0].shape[0], n_components)
