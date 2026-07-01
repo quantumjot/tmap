@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Callable, List, Optional
 
 import jax
@@ -236,6 +237,64 @@ def jax_cross_entropy_gradient_2(p, y, a, b, *, eps: float = 1e-8):
     return loss
 
 
+@partial(jax.jit, static_argnames=("n_steps",))
+def _sgd_chunk(p, y, a, b, learning_rate, n_steps):
+    """Run ``n_steps`` full-batch SGD updates entirely on-device.
+
+    Keeping the inner loop inside a single ``jax.lax.fori_loop`` avoids a
+    host<->device round-trip and a Python dispatch on every iteration (the old
+    loop synced ``loss`` back to the host each step to update the progress
+    bar, which serialised the GPU). The update rule is identical to the
+    previous ``y = y - learning_rate * grad`` so results are unchanged.
+    """
+    grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
+
+    def body(_, carry):
+        y, _last_loss = carry
+        loss, grad = grad_fn(p, y, a, b)
+        return (y - learning_rate * grad, loss)
+
+    y, last_loss = jax.lax.fori_loop(0, n_steps, body, (y, jnp.inf))
+    return y, last_loss
+
+
+def optimize_embedding(
+    p: npt.NDArray,
+    y: npt.NDArray,
+    a: float,
+    b: float,
+    *,
+    learning_rate: float,
+    n_iterations: int,
+    chunk: int = 20,
+    progress: bool = True,
+) -> npt.NDArray:
+    """Optimise the low-dimensional embedding with on-device SGD.
+
+    The iterations run on-device in blocks of ``chunk`` steps; the loss is only
+    pulled back to the host once per block for the progress bar, instead of
+    every iteration. This is the single code path used by both ``fit`` and the
+    benchmark harness.
+    """
+    p = jnp.asarray(p)
+    y = jnp.asarray(y)
+    lr = jnp.asarray(learning_rate, dtype=y.dtype)
+
+    remaining = n_iterations
+    loss = np.inf
+    pbar = tqdm(total=n_iterations, disable=not progress)
+    while remaining > 0:
+        steps = min(chunk, remaining)
+        y, loss = _sgd_chunk(p, y, a, b, lr, steps)
+        remaining -= steps
+        if progress:
+            pbar.update(steps)
+            pbar.set_description(f"Embedding (loss: {float(loss):.3f})")
+    pbar.close()
+
+    return np.asarray(y)
+
+
 class TemporalMAP(base.MapperBase):
     """TemporalMAP.
 
@@ -363,14 +422,9 @@ class TemporalMAP(base.MapperBase):
         prob, a, b = self._initialize(sequences)
 
         y = self._layout(sequences, n_components=self.n_components)
-        grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
-        loss = np.inf
-
-        embed_pbar = tqdm(range(max_iterations))
-        for _ in embed_pbar:
-            embed_pbar.set_description(f"Embedding (loss: {loss:.3f})")
-            loss, grad = grad_fn(prob, y, a, b)
-            y = y - learning_rate * grad
+        y = optimize_embedding(
+            prob, y, a, b, learning_rate=learning_rate, n_iterations=max_iterations
+        )
 
         self._embedding = y
         self._P = prob

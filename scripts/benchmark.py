@@ -58,23 +58,24 @@ def load_real_data(n_sequences: Optional[int] = None) -> Optional[list[np.ndarra
 
 
 def _time_embedding(prob: np.ndarray, n_components: int, iterations: int) -> float:
-    """Time only the optimisation loop, excluding JIT compilation."""
-    import jax
+    """Time only the optimisation loop, excluding JIT compilation.
 
+    Uses the production ``optimize_embedding`` path so the benchmark tracks
+    whatever the library actually does.
+    """
     a, b = temporal.find_hyperparameters(0.01)
     rng = np.random.default_rng(0)
     y = rng.standard_normal((prob.shape[0], n_components))
-    grad_fn = jax.value_and_grad(temporal.jax_cross_entropy_gradient_2, argnums=1)
 
     # warm-up / compile (not timed)
-    loss, grad = grad_fn(prob, y, a, b)
-    grad.block_until_ready()
+    temporal.optimize_embedding(
+        prob, y, a, b, learning_rate=0.1, n_iterations=1, progress=False
+    )
 
     start = time.perf_counter()
-    for _ in range(iterations):
-        loss, grad = grad_fn(prob, y, a, b)
-        y = y - 0.1 * grad
-    np.asarray(y)  # force host sync
+    temporal.optimize_embedding(
+        prob, y, a, b, learning_rate=0.1, n_iterations=iterations, progress=False
+    )
     return time.perf_counter() - start
 
 
