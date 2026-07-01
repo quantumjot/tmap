@@ -173,6 +173,47 @@ def estimate_sigma(
     return sigma_estimate
 
 
+def estimate_sigma_vectorized(
+    d: npt.NDArray,
+    n_neighbors: int,
+    iterations: int = 20,
+) -> npt.NDArray:
+    """Binary search for per-row sigma, for all rows at once.
+
+    Vectorised equivalent of :func:`estimate_sigma` applied to every row of the
+    (row-shifted, non-negative-clipped) distance matrix ``d``. Runs the same
+    bisection on ``[SIGMA_LOW_ESTIMATE, SIGMA_HIGH_ESTIMATE]`` for all rows
+    simultaneously, replacing the Python row loop with array operations.
+
+    Parameters
+    ----------
+    d : npt.NDArray, shape (N, N)
+        Distances with each row's ``rho`` already subtracted (not yet clipped).
+    n_neighbors : int
+        Target effective number of neighbours per row.
+
+    Returns
+    -------
+    sigma : npt.NDArray, shape (N,)
+        Estimated sigma for each row.
+    """
+    n = d.shape[0]
+    d_clipped = np.clip(d, 0.0, np.inf)
+    lower = np.full(n, base.SIGMA_LOW_ESTIMATE, dtype=np.float64)
+    upper = np.full(n, base.SIGMA_HIGH_ESTIMATE, dtype=np.float64)
+    sigma = (lower + upper) / 2
+
+    for _ in range(iterations):
+        sigma = (lower + upper) / 2
+        prob = np.exp(-d_clipped / sigma[:, None])
+        k = np.power(2.0, np.clip(prob.sum(axis=1), 0, 31.0))
+        below = k < n_neighbors
+        lower = np.where(below, sigma, lower)
+        upper = np.where(below, upper, sigma)
+
+    return sigma
+
+
 def calculate_high_dimensional_probability_matrix(
     dist: npt.NDArray,
     n_neighbors: int,
@@ -190,14 +231,16 @@ def calculate_high_dimensional_probability_matrix(
     prob : npt.NDArray
     """
 
-    # calculate the minimum (non-zero) distance for each row
-    rho = [sorted(dist[i])[1] for i in range(dist.shape[0])]
-    prob = np.zeros_like(dist, dtype=np.float64)
+    # per-row nearest-neighbour distance (rho). Each row has exactly one zero
+    # (the diagonal), so the second-smallest entry is the nearest neighbour.
+    # np.partition avoids the O(N log N) full sort of the old comprehension.
+    rho = np.partition(dist, 1, axis=1)[:, 1]
 
-    for row in range(prob.shape[0]):
-        d = dist[row, ...] - rho[row]
-        sigma = estimate_sigma(d, n_neighbors)
-        prob[row, ...] = high_dimensional_probability(d, sigma)
+    # shift each row by its rho, estimate all sigmas at once, then form the
+    # probabilities in a single vectorised exp instead of a Python row loop.
+    d = dist - rho[:, None]
+    sigma = estimate_sigma_vectorized(d, n_neighbors)
+    prob = np.exp(-np.clip(d, 0.0, np.inf) / sigma[:, None])
 
     # make the distances compatible by enforcing symmetry
     prob = symmetrize_probability_matrix_umap(prob)
