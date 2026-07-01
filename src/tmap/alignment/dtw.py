@@ -27,6 +27,11 @@ class DTWAlignment(base.AlignmentBase):
 
     def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray, *, mask: bool = True) -> npt.NDArray:
         warping_paths = dtw_ndim.warping_paths_fast if HAS_DTW_C else dtw_ndim.warping_paths
+        # The compiled DTW requires C-contiguous float64 input; it rejects
+        # other dtypes (e.g. float16/float32) that the pure-Python path
+        # tolerated. Coerce here so both paths behave the same.
+        sequence_i = np.ascontiguousarray(sequence_i, dtype=np.float64)
+        sequence_j = np.ascontiguousarray(sequence_j, dtype=np.float64)
         _, paths = warping_paths(sequence_i, sequence_j, window=self.window)
 
         if not mask:

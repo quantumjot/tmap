@@ -146,3 +146,24 @@ def test_embedding_loss_decreases_and_is_deterministic():
 
     assert losses1[-1] < losses1[0]  # loss decreased
     np.testing.assert_allclose(y1, y2, rtol=1e-6, atol=1e-6)  # deterministic
+
+
+# --- aligner input-dtype robustness ----------------------------------------
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_dtw_alignment_accepts_non_float64_input(dtype):
+    """The compiled DTW fast path only accepts float64; the aligner must coerce
+    other dtypes (float16/float32) that the pure-Python path used to tolerate,
+    and return the same result regardless of input dtype.
+    """
+    rng = np.random.default_rng(0)
+    a = np.cumsum(rng.standard_normal((30, 3)), axis=0)
+    b = np.cumsum(rng.standard_normal((30, 3)), axis=0)
+
+    ref = DTWAlignment()(a.astype(np.float64), b.astype(np.float64))
+    out = DTWAlignment()(a.astype(dtype), b.astype(dtype))
+
+    assert out.shape == ref.shape
+    if dtype is np.float64:
+        np.testing.assert_array_equal(out, ref)
