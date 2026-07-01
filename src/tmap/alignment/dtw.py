@@ -8,22 +8,34 @@ from tmap import base
 from tmap.alignment.masking import masked_path_from_DTW
 
 
+# Whether the dtaidistance compiled C extension is available. When it is, the
+# ``*_fast`` implementations run in C and are ~100x faster than the pure-Python
+# fallback; they also release the GIL, so thread-based parallelism helps. When
+# it is not (e.g. libomp missing), we fall back to pure Python and callers
+# should prefer process-based parallelism.
+HAS_DTW_C = dtw.try_import_c(verbose=False)
+
+
 class DTWAlignment(base.AlignmentBase):
     """Use DTW to perform the alignment between two sequences."""
 
     def __init__(self, *, window: Optional[int] = None):
         self.window = window
+        # exposed so calculate_distance_matrix can pick threads (C, GIL released)
+        # vs processes (pure Python) for parallel alignment.
+        self.releases_gil = HAS_DTW_C
 
     def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray, *, mask: bool = True) -> npt.NDArray:
-        _, paths = dtw_ndim.warping_paths(sequence_i, sequence_j, window=self.window)
+        warping_paths = dtw_ndim.warping_paths_fast if HAS_DTW_C else dtw_ndim.warping_paths
+        _, paths = warping_paths(sequence_i, sequence_j, window=self.window)
 
         if not mask:
             return paths[1:, 1:]
-        
+
         best_path = dtw.best_path(paths)
         mask = masked_path_from_DTW(paths, best_path)
         return mask
-    
+
     @property
     def name(self) -> str:
         return "DTW"

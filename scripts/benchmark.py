@@ -86,12 +86,13 @@ def benchmark_one(
     n_components: int,
     iterations: int,
     window: Optional[int],
+    n_jobs: Optional[int] = None,
 ) -> dict:
     n_nodes = sum(s.shape[0] for s in sequences)
     aligner = DTWAlignment(window=window)
 
     t0 = time.perf_counter()
-    dist = temporal.calculate_distance_matrix(sequences, aligner, mask=True)
+    dist = temporal.calculate_distance_matrix(sequences, aligner, mask=True, n_jobs=n_jobs)
     t_align = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -122,6 +123,7 @@ def main() -> None:
     p.add_argument("--components", type=int, default=2)
     p.add_argument("--iterations", type=int, default=200)
     p.add_argument("--window", type=int, default=None)
+    p.add_argument("--jobs", type=int, default=None, help="threads for pairwise DTW; -1 for all cores")
     p.add_argument("--real-data", action="store_true")
     p.add_argument("--output", type=str, default=None, help="CSV path to append results to")
     args = p.parse_args()
@@ -143,6 +145,7 @@ def main() -> None:
             n_components=args.components,
             iterations=args.iterations,
             window=args.window,
+            n_jobs=args.jobs,
         )
         rows.append(row)
         print(

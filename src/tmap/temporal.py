@@ -1,3 +1,4 @@
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from functools import partial
 from typing import Callable, List, Optional
 
@@ -34,8 +35,18 @@ def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
     return dist
 
 
+def _align_pair_worker(args):
+    """Module-level worker so pairs can be dispatched to a process pool."""
+    aligner, i, j, seq_i, seq_j, mask = args
+    return i, j, np.asarray(aligner(seq_i, seq_j, mask=mask), dtype=np.float32)
+
+
 def calculate_distance_matrix(
-    sequences: List[npt.NDArray], aligner: base.AlignmentBase, *, mask: bool = True,
+    sequences: List[npt.NDArray],
+    aligner: base.AlignmentBase,
+    *,
+    mask: bool = True,
+    n_jobs: Optional[int] = None,
 ) -> npt.NDArray:
     """Calculate the distance matrix.
 
@@ -43,10 +54,16 @@ def calculate_distance_matrix(
     ----------
     sequences : list
         The sequences to align and calculate the distance matrix.
-    aligner : AlignmentBase 
+    aligner : AlignmentBase
         An alignment method to construct the sparse distance graph.
     mask : bool
         Whether to mask the transport plan to the optimal path.
+    n_jobs : int, optional
+        Number of workers used to compute the (independent) pairwise
+        alignments. ``None`` or ``1`` runs serially (default); ``-1`` uses all
+        available cores. When the aligner releases the GIL (DTW with the C
+        extension available) threads are used; otherwise a process pool is used
+        so pure-Python alignment still parallelises.
 
     Returns
     -------
@@ -62,26 +79,46 @@ def calculate_distance_matrix(
     n = sum(seq_shapes)
     distance_matrix = np.zeros((n, n), dtype=np.float32)
 
-    for i in tqdm(range(len(sequences)), desc=aligner.name+f" (masking={mask})"):
-        for j in range(i + 1, len(sequences)):
+    pairs = [(i, j) for i in range(len(sequences)) for j in range(i + 1, len(sequences))]
+    desc = aligner.name + f" (masking={mask})"
 
-            seq_i, seq_j = sequences[i], sequences[j]
-            alignment_output = aligner(seq_i, seq_j, mask=mask).astype(np.float32)
-            
-            sx = slice(sum(seq_shapes[:i]), sum(seq_shapes[: i + 1]), 1)
-            sy = slice(sum(seq_shapes[:j]), sum(seq_shapes[: j + 1]), 1)
+    if n_jobs in (None, 1):
+        results = [
+            (i, j, aligner(sequences[i], sequences[j], mask=mask).astype(np.float32))
+            for i, j in tqdm(pairs, desc=desc)
+        ]
+    else:
+        max_workers = None if n_jobs == -1 else n_jobs
+        # threads when the aligner releases the GIL (compiled DTW), else processes
+        use_threads = getattr(aligner, "releases_gil", False)
+        if use_threads:
+            def _align(pair):
+                i, j = pair
+                return i, j, aligner(sequences[i], sequences[j], mask=mask).astype(np.float32)
 
-            if isinstance(aligner, OTAlignment):
-                # for OT, output is a weighted transport plan (correspondence)
-                distances = 1.0 / (alignment_output + 1e-9)
-                distance_matrix[sx, sy] = distances
-            elif isinstance(aligner, DTWAlignment):
-                # for DTW, the output is the cost matrix, which is already a
-                # distance matrix (low cost = low distance), so we can use it directly
-                distance_matrix[sx, sy] = alignment_output
-            else:
-                distance_matrix[sx, sy] = alignment_output
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(tqdm(executor.map(_align, pairs), total=len(pairs), desc=desc))
+        else:
+            work = [(aligner, i, j, sequences[i], sequences[j], mask) for i, j in pairs]
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                results = list(
+                    tqdm(executor.map(_align_pair_worker, work), total=len(pairs), desc=desc)
+                )
 
+    for i, j, alignment_output in results:
+        sx = slice(sum(seq_shapes[:i]), sum(seq_shapes[: i + 1]), 1)
+        sy = slice(sum(seq_shapes[:j]), sum(seq_shapes[: j + 1]), 1)
+
+        if isinstance(aligner, OTAlignment):
+            # for OT, output is a weighted transport plan (correspondence)
+            distances = 1.0 / (alignment_output + 1e-9)
+            distance_matrix[sx, sy] = distances
+        elif isinstance(aligner, DTWAlignment):
+            # for DTW, the output is the cost matrix, which is already a
+            # distance matrix (low cost = low distance), so we can use it directly
+            distance_matrix[sx, sy] = alignment_output
+        else:
+            distance_matrix[sx, sy] = alignment_output
 
     # consider the local connectivity of the trajectory too
     local = [intra_sequence_feature_dist(seq) for seq in sequences]
@@ -336,12 +373,14 @@ class TemporalMAP(base.MapperBase):
         layout: InitialLayout | base.LayoutBase | str = "SPECTRAL",
         aligner: Optional[base.AlignmentBase] = None,
         mask: bool = True,
+        n_jobs: Optional[int] = None,
     ):
         self.n_neighbors = n_neighbors
         self.min_dist = min_dist
         self.n_components = n_components
         self.window = window
         self.mask = mask
+        self.n_jobs = n_jobs
 
         self._sequences = []
         self._P = None
@@ -392,7 +431,9 @@ class TemporalMAP(base.MapperBase):
         sequences: List[npt.NDArray],
     ) -> npt.NDArray:
         """Calculate the distance matrix."""
-        self._distance_matrix = calculate_distance_matrix(sequences, self.aligner, mask=self.mask)
+        self._distance_matrix = calculate_distance_matrix(
+            sequences, self.aligner, mask=self.mask, n_jobs=self.n_jobs
+        )
         return self._distance_matrix
 
     def fit(
