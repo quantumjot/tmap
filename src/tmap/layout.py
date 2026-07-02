@@ -7,15 +7,31 @@ from functools import partial
 from sklearn.manifold import SpectralEmbedding
 from tmap.base import LayoutBase
 
+# All layouts accept (and may ignore) the common keyword arguments
+# ``random_state`` and ``n_neighbors`` so the mapper can thread its
+# reproducibility seed and neighbourhood size through uniformly.
+
 
 class SpectralLayout(LayoutBase):
     """Basic spectral embedding for initial layout of features"""
     def __init__(self):
         pass
 
-    def fit_transform(self, sequences: list[npt.NDArray], *, n_components: int = 2):
+    def fit_transform(
+        self,
+        sequences: list[npt.NDArray],
+        *,
+        n_components: int = 2,
+        n_neighbors: int = 15,
+        random_state: int | None = None,
+        **kwargs,
+    ):
         x_cat = self._concatenate_sequences(sequences)
-        model = SpectralEmbedding(n_components=n_components, n_neighbors=x_cat.shape[-1])
+        model = SpectralEmbedding(
+            n_components=n_components,
+            n_neighbors=min(n_neighbors, x_cat.shape[0] - 1),
+            random_state=random_state,
+        )
         return model.fit_transform(x_cat)
 
 
@@ -24,28 +40,43 @@ class RandomLayout(LayoutBase):
     def __init__(self):
         pass
 
-    def fit_transform(self, sequences: list[npt.NDArray], *, n_components: int = 2):
+    def fit_transform(
+        self,
+        sequences: list[npt.NDArray],
+        *,
+        n_components: int = 2,
+        random_state: int | None = None,
+        **kwargs,
+    ):
         x_cat = self._concatenate_sequences(sequences)
-        return np.random.randn(x_cat.shape[0], n_components)
+        rng = np.random.default_rng(random_state)
+        return rng.standard_normal((x_cat.shape[0], n_components))
 
 
 class UMAPLayout(LayoutBase):
     """A UMAP embedding for initial layout of features"""
     def __init__(self, *, min_dist: float = 0.1, n_neighbors: int = 10):
-        self._umap = umap.UMAP()
-        self._min_dist = min_dist 
+        self._min_dist = min_dist
         self._n_neighbors = n_neighbors
 
-    def fit_transform(self, sequences: list[npt.NDArray], *, n_components: int = 2, ):
+    def fit_transform(
+        self,
+        sequences: list[npt.NDArray],
+        *,
+        n_components: int = 2,
+        random_state: int | None = None,
+        **kwargs,
+    ):
         x_cat = self._concatenate_sequences(sequences)
-        y = self._umap.fit_transform(
-            x_cat,
+        # parameters must go to the constructor: UMAP.fit_transform silently
+        # swallows unknown keyword arguments, so passing them there is a no-op
+        model = umap.UMAP(
             min_dist=self._min_dist,
             n_neighbors=self._n_neighbors,
             n_components=n_components,
-
+            random_state=random_state,
         )
-        return y
+        return model.fit_transform(x_cat)
 
 
 class TemporalLayout(LayoutBase):
@@ -53,7 +84,13 @@ class TemporalLayout(LayoutBase):
     def __init__(self):
         pass
 
-    def fit_transform(self, sequences: list[npt.NDArray], *, n_components: int = 2):
+    def fit_transform(
+        self,
+        sequences: list[npt.NDArray],
+        *,
+        n_components: int = 2,
+        **kwargs,
+    ):
 
         from dtaidistance import clustering, dtw_ndim
         from scipy.cluster.hierarchy import leaves_list
@@ -67,7 +104,7 @@ class TemporalLayout(LayoutBase):
             seq = sequences[idx]
             n = len(seq)
             _y = np.zeros((n, n_components))
-            _y[:, 0] = idx 
+            _y[:, 0] = idx
             _y[:n, 1] = np.arange(n)
             y.append(_y)
         y = np.concatenate(y, axis=0)

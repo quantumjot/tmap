@@ -23,10 +23,6 @@ from tmap.embedding import (  # noqa: F401  (re-exported for back-compat)
 from tmap.layout import InitialLayout
 
 
-# set a default random seed
-np.random.seed(123)
-
-
 def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
     """Calculate the intra sequence feature distance.
     
@@ -135,7 +131,7 @@ def calculate_distance_matrix(
         if isinstance(aligner, OTAlignment):
             # for OT, output is a weighted transport plan (correspondence);
             # convert transported mass to a distance
-            vals = (1.0 / (vals + 1e-9)).astype(np.float32)
+            vals = aligner.transport_mass_to_distance(vals)
         # for DTW the output is already a distance (path cost), use directly
 
         if j == i + 1:
@@ -287,6 +283,7 @@ def estimate_sigma_vectorized(
     d: npt.NDArray,
     n_neighbors: int,
     iterations: int = 20,
+    sigma_tol: Optional[float] = None,
 ) -> npt.NDArray:
     """Binary search for per-row sigma, for all rows at once.
 
@@ -301,6 +298,10 @@ def estimate_sigma_vectorized(
         Distances with each row's ``rho`` already subtracted (not yet clipped).
     n_neighbors : int
         Target effective number of neighbours per row.
+    sigma_tol : float, optional
+        Opt-in early stop: break once every row's bisection bracket is
+        narrower than ``sigma_tol``. ``None`` (default) always runs the fixed
+        number of iterations and is bit-identical to the original behaviour.
 
     Returns
     -------
@@ -320,6 +321,8 @@ def estimate_sigma_vectorized(
         below = k < n_neighbors
         lower = np.where(below, sigma, lower)
         upper = np.where(below, upper, sigma)
+        if sigma_tol is not None and np.all(upper - lower < sigma_tol):
+            break
 
     return sigma
 
@@ -408,12 +411,14 @@ def _estimate_sigma_sparse(
     n: int,
     n_neighbors: int,
     iterations: int = 20,
+    sigma_tol: Optional[float] = None,
 ) -> npt.NDArray:
     """Per-row sigma bisection over the stored edges only.
 
     Identical to :func:`estimate_sigma_vectorized` except the per-row
     probability sum runs over the row's stored edges plus 1.0 for the
     diagonal, instead of a full dense row (whose non-edges contribute zero).
+    ``sigma_tol`` behaves as in :func:`estimate_sigma_vectorized`.
     """
     lower = np.full(n, base.SIGMA_LOW_ESTIMATE, dtype=np.float64)
     upper = np.full(n, base.SIGMA_HIGH_ESTIMATE, dtype=np.float64)
@@ -427,6 +432,8 @@ def _estimate_sigma_sparse(
         below = k < n_neighbors
         lower = np.where(below, sigma, lower)
         upper = np.where(below, upper, sigma)
+        if sigma_tol is not None and np.all(upper - lower < sigma_tol):
+            break
 
     return sigma
 
@@ -614,7 +621,12 @@ class TemporalMAP(base.MapperBase):
 
         prob, a, b = self._initialize(sequences)
 
-        y = self._layout(sequences, n_components=self.n_components)
+        y = self._layout(
+            sequences,
+            n_components=self.n_components,
+            n_neighbors=self.n_neighbors,
+            random_state=self.random_state,
+        )
         y = optimize_embedding(
             prob,
             y,
@@ -638,28 +650,35 @@ class DefaultUMAP(base.MapperBase):
     """Simple wrapper around UMAP to provide comparison with TMAP"""
 
     def __init__(
-        self, 
-        *, 
-        min_dist: int = base.MIN_DIST, 
-        n_neighbors: int = 1, 
-        n_components: int = base.N_COMPONENTS
+        self,
+        *,
+        min_dist: int = base.MIN_DIST,
+        n_neighbors: int = 15,
+        n_components: int = base.N_COMPONENTS,
+        random_state: Optional[int] = None,
     ):
-        self._umap = umap.UMAP()
         self.min_dist = min_dist
         self.n_neighbors = n_neighbors
         self.n_components = n_components
+        self.random_state = random_state
         self.window = None
+        # parameters must go to the constructor: UMAP.fit_transform silently
+        # swallows unknown keyword arguments, so passing them there was a
+        # no-op (the previous n_neighbors=1 default was never applied; the
+        # new default matches UMAP's own, preserving effective behaviour)
+        self._umap = umap.UMAP(
+            min_dist=self.min_dist,
+            n_neighbors=self.n_neighbors,
+            n_components=self.n_components,
+            random_state=self.random_state,
+        )
 
     def fit(self, sequences):
 
         self._sequences = sequences
         x = np.concatenate(self._sequences, axis=0)
 
-        y = self._umap.fit_transform(
-            x,
-            min_dist=self.min_dist,
-            n_neighbors=self.n_neighbors,
-        )
+        y = self._umap.fit_transform(x)
 
         self._embedding = y
         return y

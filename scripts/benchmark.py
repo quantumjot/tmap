@@ -59,7 +59,9 @@ def load_real_data(n_sequences: Optional[int] = None) -> Optional[list[np.ndarra
     return tracks[:n_sequences] if n_sequences else tracks
 
 
-def _time_embedding(prob: np.ndarray, n_components: int, iterations: int) -> float:
+def _time_embedding(
+    prob, n_components: int, iterations: int, optimizer: str = "sampled"
+) -> float:
     """Time only the optimisation loop, excluding JIT compilation.
 
     Uses the production ``optimize_embedding`` path so the benchmark tracks
@@ -72,12 +74,12 @@ def _time_embedding(prob: np.ndarray, n_components: int, iterations: int) -> flo
     # warm-up / compile (not timed). Runs one full 20-step chunk so the same
     # jitted kernel the timed run uses is already compiled.
     temporal.optimize_embedding(
-        prob, y, a, b, n_iterations=min(20, iterations), progress=False
+        prob, y, a, b, n_iterations=min(20, iterations), progress=False, optimizer=optimizer
     )
 
     start = time.perf_counter()
     temporal.optimize_embedding(
-        prob, y, a, b, n_iterations=iterations, progress=False
+        prob, y, a, b, n_iterations=iterations, progress=False, optimizer=optimizer
     )
     return time.perf_counter() - start
 
@@ -90,6 +92,7 @@ def benchmark_one(
     iterations: int,
     window: Optional[int],
     n_jobs: Optional[int] = None,
+    optimizer: str = "sampled",
 ) -> dict:
     n_nodes = sum(s.shape[0] for s in sequences)
     aligner = DTWAlignment(window=window)
@@ -102,7 +105,7 @@ def benchmark_one(
     prob = temporal.calculate_high_dimensional_probability_matrix(dist, n_neighbors)
     t_prob = time.perf_counter() - t0
 
-    t_embed = _time_embedding(prob, n_components, iterations)
+    t_embed = _time_embedding(prob, n_components, iterations, optimizer)
 
     dense_bytes = n_nodes * n_nodes * 8
     if sparse.issparse(prob):
@@ -128,7 +131,13 @@ def benchmark_one(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--sequences", type=int, nargs="+", default=[10, 20, 40])
+    p.add_argument("--sequences", type=int, nargs="+", default=[10, 20, 40, 80])
+    p.add_argument(
+        "--optimizer",
+        choices=["sampled", "dense"],
+        default="sampled",
+        help="embedding optimizer to benchmark",
+    )
     p.add_argument("--length", type=int, default=100)
     p.add_argument("--features", type=int, default=3)
     p.add_argument("--neighbors", type=int, default=15)
@@ -158,6 +167,7 @@ def main() -> None:
             iterations=args.iterations,
             window=args.window,
             n_jobs=args.jobs,
+            optimizer=args.optimizer,
         )
         rows.append(row)
         print(
