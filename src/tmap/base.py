@@ -8,7 +8,10 @@ N_NEIGHBORS = 15
 N_COMPONENTS = 2
 MIN_DIST = 0.01
 LEARNING_RATE = 1e-1
+LEARNING_RATE_SAMPLED = 1.0  # UMAP-conventional initial alpha, decays to zero
 MAX_ITERATIONS = 200
+N_NEGATIVE = 5
+REPULSION_STRENGTH = 1.0
 SIGMA_LOW_ESTIMATE = 0.0
 SIGMA_HIGH_ESTIMATE = 1000.0
 
@@ -48,8 +51,24 @@ class MapperBase(abc.ABC):
         return [self.embeddings[slice_seq(i), ...] for i in range(len(seq))]
 
     @property
-    def distance_matrix(self) -> npt.NDArray | None:
+    def distance_matrix(self):
+        """The pairwise distance graph as ``scipy.sparse.csr_matrix``.
+
+        Only edges are stored; absent entries denote unconnected pairs (the
+        dense representation's ``inf``). Use :attr:`distance_matrix_dense`
+        for the historical dense ``ndarray`` form.
+        """
         return self._distance_matrix
+
+    @property
+    def distance_matrix_dense(self) -> npt.NDArray | None:
+        """Dense ``ndarray`` form of :attr:`distance_matrix` (non-edges are
+        ``inf``, diagonal zero)."""
+        if self._distance_matrix is None:
+            return None
+        from tmap.temporal import densify_distance_matrix
+
+        return densify_distance_matrix(self._distance_matrix)
 
     @property
     def embeddings(self) -> npt.NDArray | None:
