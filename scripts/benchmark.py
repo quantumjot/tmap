@@ -67,14 +67,15 @@ def _time_embedding(prob: np.ndarray, n_components: int, iterations: int) -> flo
     rng = np.random.default_rng(0)
     y = rng.standard_normal((prob.shape[0], n_components))
 
-    # warm-up / compile (not timed)
+    # warm-up / compile (not timed). Runs one full 20-step chunk so the same
+    # jitted kernel the timed run uses is already compiled.
     temporal.optimize_embedding(
-        prob, y, a, b, learning_rate=0.1, n_iterations=1, progress=False
+        prob, y, a, b, n_iterations=min(20, iterations), progress=False
     )
 
     start = time.perf_counter()
     temporal.optimize_embedding(
-        prob, y, a, b, learning_rate=0.1, n_iterations=iterations, progress=False
+        prob, y, a, b, n_iterations=iterations, progress=False
     )
     return time.perf_counter() - start
 

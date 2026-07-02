@@ -1,9 +1,6 @@
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from functools import partial
 from typing import Callable, List, Optional
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 import numpy.typing as npt
 import umap
@@ -13,6 +10,16 @@ from tqdm import tqdm
 
 from tmap import base
 from tmap.alignment import DTWAlignment, OTAlignment
+from tmap.embedding import (  # noqa: F401  (re-exported for back-compat)
+    edges_from_matrix,
+    jax_cross_entropy_gradient_2,
+    jax_euclidean_distances,
+    optimize_embedding,
+    optimize_embedding_dense,
+    optimize_embedding_sampled,
+    sampled_embedding_loss,
+    _sgd_chunk,
+)
 from tmap.layout import InitialLayout
 
 
@@ -278,103 +285,6 @@ def find_hyperparameters(min_dist: float):
     return a, b
 
 
-@jax.jit
-def jax_euclidean_distances(i, j):
-    """Calculate the Euclidean distances between two arrays.
-
-    Parameters
-    ----------
-
-    Returns
-    -------
-    """
-    M = i.shape[0]
-    N = j.shape[0]
-    I_dots = jnp.reshape(jnp.sum((i * i), axis=1), (M, 1)) * jnp.ones(shape=(1, N))
-    J_dots = jnp.sum((j * j), axis=1) * jnp.ones(shape=(M, 1))
-    D_squared = I_dots + J_dots - 2 * jnp.dot(i, j.T)
-    return jnp.maximum(0.0, D_squared)
-
-
-@jax.jit
-def jax_cross_entropy_gradient_2(p, y, a, b, *, eps: float = 1e-8):
-    """Calculate the BCE gradient.
-
-    Parameters
-    ----------
-
-    Returns
-    -------
-    """
-    n = y.shape[0]
-    d = jax_euclidean_distances(y, y)
-    w = jnp.power(1.0 + a * (d + eps) ** b, -1)
-    w = w * (1 - jnp.identity(n))
-    w_sum = jnp.sum(w, axis=1, keepdims=True)
-    q = w / (w_sum + eps)
-    q = jnp.clip(q, eps, 1.0 - eps)
-    loss = -jnp.sum(p * jnp.log(q) + (1 - p) * jnp.log(1 - q))
-    return loss
-
-
-@partial(jax.jit, static_argnames=("n_steps",))
-def _sgd_chunk(p, y, a, b, learning_rate, n_steps):
-    """Run ``n_steps`` full-batch SGD updates entirely on-device.
-
-    Keeping the inner loop inside a single ``jax.lax.fori_loop`` avoids a
-    host<->device round-trip and a Python dispatch on every iteration (the old
-    loop synced ``loss`` back to the host each step to update the progress
-    bar, which serialised the GPU). The update rule is identical to the
-    previous ``y = y - learning_rate * grad`` so results are unchanged.
-    """
-    grad_fn = jax.value_and_grad(jax_cross_entropy_gradient_2, argnums=1)
-
-    def body(_, carry):
-        y, _last_loss = carry
-        loss, grad = grad_fn(p, y, a, b)
-        return (y - learning_rate * grad, loss)
-
-    y, last_loss = jax.lax.fori_loop(0, n_steps, body, (y, jnp.inf))
-    return y, last_loss
-
-
-def optimize_embedding(
-    p: npt.NDArray,
-    y: npt.NDArray,
-    a: float,
-    b: float,
-    *,
-    learning_rate: float,
-    n_iterations: int,
-    chunk: int = 20,
-    progress: bool = True,
-) -> npt.NDArray:
-    """Optimise the low-dimensional embedding with on-device SGD.
-
-    The iterations run on-device in blocks of ``chunk`` steps; the loss is only
-    pulled back to the host once per block for the progress bar, instead of
-    every iteration. This is the single code path used by both ``fit`` and the
-    benchmark harness.
-    """
-    p = jnp.asarray(p)
-    y = jnp.asarray(y)
-    lr = jnp.asarray(learning_rate, dtype=y.dtype)
-
-    remaining = n_iterations
-    loss = np.inf
-    pbar = tqdm(total=n_iterations, disable=not progress)
-    while remaining > 0:
-        steps = min(chunk, remaining)
-        y, loss = _sgd_chunk(p, y, a, b, lr, steps)
-        remaining -= steps
-        if progress:
-            pbar.update(steps)
-            pbar.set_description(f"Embedding (loss: {float(loss):.3f})")
-    pbar.close()
-
-    return np.asarray(y)
-
-
 class TemporalMAP(base.MapperBase):
     """TemporalMAP.
 
@@ -392,12 +302,24 @@ class TemporalMAP(base.MapperBase):
     window : int, None
         The window used by the dynamic time warping function. Balances
         local temporal features vs global trajectory warping.
-    layout : str, InitialLayout 
+    layout : str, InitialLayout
         The initial layout methods, defaults to spectral embedding.
-    aligner : AlignmentBase 
+    aligner : AlignmentBase
         An alignment method to construct the sparse distance graph.
     mask : bool
         Whether to mask the transport plan to the optimal path.
+    optimizer : str
+        Embedding optimiser: ``"sampled"`` (default, UMAP-style stochastic
+        optimisation over graph edges with negative sampling, O(nnz) per
+        epoch) or ``"dense"`` (original full-batch gradient descent, O(N^2)
+        per iteration, reproduces embeddings from earlier versions exactly).
+    n_negative : int
+        Negative samples per edge per epoch (sampled optimiser only).
+    repulsion_strength : float
+        Weight of the repulsive term (sampled optimiser only).
+    random_state : int, optional
+        Seed for the stochastic optimiser; fixed seed gives deterministic
+        embeddings.
 
     Attributes
     ----------
@@ -417,6 +339,10 @@ class TemporalMAP(base.MapperBase):
         aligner: Optional[base.AlignmentBase] = None,
         mask: bool = True,
         n_jobs: Optional[int] = None,
+        optimizer: str = "sampled",
+        n_negative: int = base.N_NEGATIVE,
+        repulsion_strength: float = base.REPULSION_STRENGTH,
+        random_state: Optional[int] = None,
     ):
         self.n_neighbors = n_neighbors
         self.min_dist = min_dist
@@ -424,6 +350,10 @@ class TemporalMAP(base.MapperBase):
         self.window = window
         self.mask = mask
         self.n_jobs = n_jobs
+        self.optimizer = optimizer
+        self.n_negative = n_negative
+        self.repulsion_strength = repulsion_strength
+        self.random_state = random_state
 
         self._sequences = []
         self._P = None
@@ -482,7 +412,7 @@ class TemporalMAP(base.MapperBase):
     def fit(
         self,
         sequences: List[npt.NDArray],
-        learning_rate: float = base.LEARNING_RATE,
+        learning_rate: Optional[float] = None,
         max_iterations: int = base.MAX_ITERATIONS,
     ) -> npt.NDArray:
         """
@@ -492,8 +422,10 @@ class TemporalMAP(base.MapperBase):
             These should be high dimensional arrays that represent the trajectories.
             [(n_i, m), (n_j, m), ..., (n_k, m)] where n_i, is the length of
             trajectory i and m is the number of features for each timepoint.
-        learning_rate : float
-            The learning rate for the optimization.
+        learning_rate : float, optional
+            The learning rate for the optimization. ``None`` (default) uses
+            the per-optimiser default (1.0 with linear decay for
+            ``optimizer="sampled"``, 0.1 constant for ``optimizer="dense"``).
         max_iterations : int
             The maximum number of interations for the optimization.
 
@@ -507,7 +439,16 @@ class TemporalMAP(base.MapperBase):
 
         y = self._layout(sequences, n_components=self.n_components)
         y = optimize_embedding(
-            prob, y, a, b, learning_rate=learning_rate, n_iterations=max_iterations
+            prob,
+            y,
+            a,
+            b,
+            learning_rate=learning_rate,
+            n_iterations=max_iterations,
+            optimizer=self.optimizer,
+            n_negative=self.n_negative,
+            repulsion_strength=self.repulsion_strength,
+            random_state=self.random_state,
         )
 
         self._embedding = y
