@@ -1,4 +1,0 @@
-n_sequences,n_nodes,n_features,t_alignment_s,t_probability_s,t_embedding_s,t_total_s,dense_matrix_mb
-10,1000,3,0.0525,0.0574,0.1939,0.3038,8.0
-20,2000,3,0.1559,0.2304,0.4381,0.8244,32.0
-40,4000,3,0.7767,0.9506,1.5593,3.2866,128.0
