@@ -5,7 +5,7 @@ import numpy as np
 import numpy.typing as npt
 import umap
 
-from scipy import optimize
+from scipy import optimize, sparse
 from tqdm import tqdm
 
 from tmap import base
@@ -42,10 +42,29 @@ def intra_sequence_feature_dist(seq: npt.NDArray) -> list[float]:
     return dist
 
 
+def _pair_alignment_triplets(aligner, seq_i, seq_j, mask):
+    """Align one pair and return the edges as ``(rows, cols, vals)`` triplets.
+
+    Prefers the aligner's sparse path (no dense rectangular block); falls back
+    to extracting the nonzero cells of a dense alignment output for aligners
+    that do not support ``sparse=True``.
+    """
+    try:
+        out = aligner(seq_i, seq_j, mask=mask, sparse=True)
+    except TypeError:
+        out = aligner(seq_i, seq_j, mask=mask)
+    if isinstance(out, tuple):
+        rows, cols, vals = out
+        return np.asarray(rows), np.asarray(cols), np.asarray(vals, dtype=np.float32)
+    block = np.asarray(out)
+    rows, cols = np.nonzero(block)
+    return rows, cols, block[rows, cols].astype(np.float32)
+
+
 def _align_pair_worker(args):
     """Module-level worker so pairs can be dispatched to a process pool."""
     aligner, i, j, seq_i, seq_j, mask = args
-    return i, j, np.asarray(aligner(seq_i, seq_j, mask=mask), dtype=np.float32)
+    return i, j, _pair_alignment_triplets(aligner, seq_i, seq_j, mask)
 
 
 def calculate_distance_matrix(
@@ -54,8 +73,8 @@ def calculate_distance_matrix(
     *,
     mask: bool = True,
     n_jobs: Optional[int] = None,
-) -> npt.NDArray:
-    """Calculate the distance matrix.
+) -> sparse.csr_matrix:
+    """Calculate the sparse distance matrix.
 
     Parameters
     ----------
@@ -74,24 +93,23 @@ def calculate_distance_matrix(
 
     Returns
     -------
-    distance_matrix : array
-        An array representing the distance matrix between all pairs of sequences in the input.
-
-    Notes
-    -----
-    This could be a sparse matrix in practice.
+    distance_matrix : scipy.sparse.csr_matrix
+        The symmetric distance graph. Only edges (finite pairwise distances)
+        are stored; absent entries denote unconnected node pairs (the dense
+        representation's ``inf``) and the diagonal is implicitly zero. Use
+        :func:`densify_distance_matrix` to recover the dense form.
     """
 
     seq_shapes = [s.shape[0] for s in sequences]
-    n = sum(seq_shapes)
-    distance_matrix = np.zeros((n, n), dtype=np.float32)
+    offsets = np.concatenate([[0], np.cumsum(seq_shapes)]).astype(np.int64)
+    n = int(offsets[-1])
 
     pairs = [(i, j) for i in range(len(sequences)) for j in range(i + 1, len(sequences))]
     desc = aligner.name + f" (masking={mask})"
 
     if n_jobs in (None, 1):
         results = [
-            (i, j, aligner(sequences[i], sequences[j], mask=mask).astype(np.float32))
+            (i, j, _pair_alignment_triplets(aligner, sequences[i], sequences[j], mask))
             for i, j in tqdm(pairs, desc=desc)
         ]
     else:
@@ -101,7 +119,7 @@ def calculate_distance_matrix(
         if use_threads:
             def _align(pair):
                 i, j = pair
-                return i, j, aligner(sequences[i], sequences[j], mask=mask).astype(np.float32)
+                return i, j, _pair_alignment_triplets(aligner, sequences[i], sequences[j], mask)
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 results = list(tqdm(executor.map(_align, pairs), total=len(pairs), desc=desc))
@@ -112,18 +130,103 @@ def calculate_distance_matrix(
                     tqdm(executor.map(_align_pair_worker, work), total=len(pairs), desc=desc)
                 )
 
-    for i, j, alignment_output in results:
+    all_rows, all_cols, all_vals = [], [], []
+    for i, j, (rows, cols, vals) in results:
+        if isinstance(aligner, OTAlignment):
+            # for OT, output is a weighted transport plan (correspondence);
+            # convert transported mass to a distance
+            vals = (1.0 / (vals + 1e-9)).astype(np.float32)
+        # for DTW the output is already a distance (path cost), use directly
+
+        if j == i + 1:
+            # the sequence-boundary cell (last node of i, first node of j) sits
+            # on the global super-diagonal, which is reserved for the
+            # intra-sequence local distances (inf across boundaries) — an
+            # alignment cell landing there is discarded
+            boundary = (rows == seq_shapes[i] - 1) & (cols == 0)
+            if boundary.any():
+                keep = ~boundary
+                rows, cols, vals = rows[keep], cols[keep], vals[keep]
+
+        all_rows.append(rows + offsets[i])
+        all_cols.append(cols + offsets[j])
+        all_vals.append(vals)
+
+    # consider the local connectivity of the trajectory too: consecutive nodes
+    # within each sequence are linked by their squared feature distance
+    for i, seq in enumerate(sequences):
+        local = np.linalg.norm(np.diff(seq, axis=0), 2, axis=1) ** 2
+        idx = offsets[i] + np.arange(seq.shape[0] - 1)
+        all_rows.append(idx)
+        all_cols.append(idx + 1)
+        all_vals.append(local.astype(np.float32))
+
+    rows = np.concatenate(all_rows)
+    cols = np.concatenate(all_cols)
+    vals = np.concatenate(all_vals)
+
+    # zero distances denote "no edge" (the dense assembly mapped them to inf),
+    # and infinite distances are non-edges by definition
+    keep = (vals != 0.0) & np.isfinite(vals)
+    rows, cols, vals = rows[keep], cols[keep], vals[keep]
+
+    # all edges above are strictly upper-triangular and unique; mirror them to
+    # make the graph symmetric
+    distance_matrix = sparse.coo_matrix(
+        (
+            np.concatenate([vals, vals]),
+            (np.concatenate([rows, cols]), np.concatenate([cols, rows])),
+        ),
+        shape=(n, n),
+        dtype=np.float32,
+    ).tocsr()
+    distance_matrix.sort_indices()
+
+    return distance_matrix
+
+
+def densify_distance_matrix(dist) -> npt.NDArray:
+    """Dense form of a sparse distance graph.
+
+    Non-edges become ``inf`` (:data:`base.EPSILON_WEIGHT`) and the diagonal is
+    zero, matching the historical dense representation.
+    """
+    if not sparse.issparse(dist):
+        return dist
+    dense = np.full(dist.shape, base.EPSILON_WEIGHT, dtype=np.float32)
+    coo = dist.tocoo()
+    dense[coo.row, coo.col] = coo.data
+    np.fill_diagonal(dense, 0.0)
+    return dense
+
+
+def _calculate_distance_matrix_dense(
+    sequences: List[npt.NDArray],
+    aligner: base.AlignmentBase,
+    *,
+    mask: bool = True,
+) -> npt.NDArray:
+    """Reference dense implementation of :func:`calculate_distance_matrix`.
+
+    Retained (serial only) to verify that the sparse assembly reproduces the
+    original dense semantics exactly; used by the equivalence tests.
+    """
+    seq_shapes = [s.shape[0] for s in sequences]
+    n = sum(seq_shapes)
+    distance_matrix = np.zeros((n, n), dtype=np.float32)
+
+    pairs = [(i, j) for i in range(len(sequences)) for j in range(i + 1, len(sequences))]
+
+    for i, j in pairs:
+        alignment_output = np.asarray(
+            aligner(sequences[i], sequences[j], mask=mask), dtype=np.float32
+        )
         sx = slice(sum(seq_shapes[:i]), sum(seq_shapes[: i + 1]), 1)
         sy = slice(sum(seq_shapes[:j]), sum(seq_shapes[: j + 1]), 1)
 
         if isinstance(aligner, OTAlignment):
             # for OT, output is a weighted transport plan (correspondence)
-            distances = 1.0 / (alignment_output + 1e-9)
-            distance_matrix[sx, sy] = distances
-        elif isinstance(aligner, DTWAlignment):
-            # for DTW, the output is the cost matrix, which is already a
-            # distance matrix (low cost = low distance), so we can use it directly
-            distance_matrix[sx, sy] = alignment_output
+            distance_matrix[sx, sy] = 1.0 / (alignment_output + 1e-9)
         else:
             distance_matrix[sx, sy] = alignment_output
 
@@ -222,21 +325,29 @@ def estimate_sigma_vectorized(
 
 
 def calculate_high_dimensional_probability_matrix(
-    dist: npt.NDArray,
+    dist,
     n_neighbors: int,
-) -> npt.NDArray:
+):
     """Calculate the high dimensional probability matrix from the adjacency
     matrix representation of the graph.
 
     Parameters
     ----------
-    dist : npt.NDArray
+    dist : scipy.sparse matrix or npt.NDArray
+        The distance graph. Sparse input (the default output of
+        :func:`calculate_distance_matrix`) produces a sparse probability
+        matrix; dense input keeps the historical dense path.
     n_neighbors : int
 
     Returns
     -------
-    prob : npt.NDArray
+    prob : scipy.sparse.csr_matrix or npt.NDArray
+        Same layout as the input: symmetric membership strengths with a unit
+        diagonal; absent sparse entries are exactly the zeros of the dense
+        form (non-edges have probability ``exp(-inf) == 0``).
     """
+    if sparse.issparse(dist):
+        return _sparse_probability_matrix(dist.tocsr(), n_neighbors)
 
     # per-row nearest-neighbour distance (rho). Each row has exactly one zero
     # (the diagonal), so the second-smallest entry is the nearest neighbour.
@@ -252,6 +363,72 @@ def calculate_high_dimensional_probability_matrix(
     # make the distances compatible by enforcing symmetry
     prob = symmetrize_probability_matrix_umap(prob)
     return prob
+
+
+def _sparse_probability_matrix(dist: sparse.csr_matrix, n_neighbors: int) -> sparse.csr_matrix:
+    """Sparse-native equivalent of the dense probability computation.
+
+    Operates only on the stored edges; the maths matches the dense path
+    exactly: non-edges (dense ``inf``) contribute ``exp(-inf) == 0`` to every
+    row sum, and the diagonal (dense ``0 - rho`` clipped to 0) contributes
+    exactly 1, which is added explicitly.
+    """
+    n = dist.shape[0]
+    indptr = dist.indptr
+    row_nnz = np.diff(indptr)
+    if np.any(row_nnz == 0):
+        raise ValueError(
+            "distance graph has isolated nodes (rows without any edge); "
+            "rho/sigma are undefined for such rows"
+        )
+    row_ids = np.repeat(np.arange(n), row_nnz)
+
+    # per-row nearest-neighbour distance over the stored edges (the dense
+    # second-smallest: the diagonal zero is the smallest, edges are > 0)
+    rho = np.minimum.reduceat(dist.data, indptr[:-1])
+
+    d = np.clip(dist.data - rho[row_ids], 0.0, np.inf)
+    sigma = _estimate_sigma_sparse(d, indptr, row_ids, n, n_neighbors)
+    prob_data = np.exp(-d / sigma[row_ids])
+
+    prob = sparse.csr_matrix(
+        (prob_data, dist.indices.copy(), indptr.copy()), shape=(n, n)
+    )
+    # symmetrise (UMAP mean) and add the unit diagonal
+    prob = (prob + prob.T) * 0.5
+    prob = (prob + sparse.identity(n, format="csr")).tocsr()
+    prob.sort_indices()
+    return prob
+
+
+def _estimate_sigma_sparse(
+    d: npt.NDArray,
+    indptr: npt.NDArray,
+    row_ids: npt.NDArray,
+    n: int,
+    n_neighbors: int,
+    iterations: int = 20,
+) -> npt.NDArray:
+    """Per-row sigma bisection over the stored edges only.
+
+    Identical to :func:`estimate_sigma_vectorized` except the per-row
+    probability sum runs over the row's stored edges plus 1.0 for the
+    diagonal, instead of a full dense row (whose non-edges contribute zero).
+    """
+    lower = np.full(n, base.SIGMA_LOW_ESTIMATE, dtype=np.float64)
+    upper = np.full(n, base.SIGMA_HIGH_ESTIMATE, dtype=np.float64)
+    sigma = (lower + upper) / 2
+
+    for _ in range(iterations):
+        sigma = (lower + upper) / 2
+        prob = np.exp(-d / sigma[row_ids])
+        row_sum = np.add.reduceat(prob, indptr[:-1]) + 1.0  # +1.0 = diagonal
+        k = np.power(2.0, np.clip(row_sum, 0, 31.0))
+        below = k < n_neighbors
+        lower = np.where(below, sigma, lower)
+        upper = np.where(below, upper, sigma)
+
+    return sigma
 
 
 def symmetrize_probability_matrix_tsne(prob: npt.NDArray) -> npt.NDArray:

@@ -5,7 +5,10 @@ from typing import Optional
 
 from dtaidistance import dtw, dtw_ndim
 from tmap import base
-from tmap.alignment.masking import masked_path_from_DTW
+from tmap.alignment.masking import (
+    masked_path_from_DTW,
+    masked_path_triplets_from_DTW,
+)
 
 
 # Whether the dtaidistance compiled C extension is available. When it is, the
@@ -25,7 +28,22 @@ class DTWAlignment(base.AlignmentBase):
         # vs processes (pure Python) for parallel alignment.
         self.releases_gil = HAS_DTW_C
 
-    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray, *, mask: bool = True) -> npt.NDArray:
+    def __call__(
+        self,
+        sequence_i: npt.NDArray,
+        sequence_j: npt.NDArray,
+        *,
+        mask: bool = True,
+        sparse: bool = False,
+    ) -> npt.NDArray:
+        """Align two sequences.
+
+        With ``sparse=True`` (and ``mask=True``) the warping path is returned
+        as ``(rows, cols, values)`` triplets instead of a dense block, so the
+        caller can assemble a sparse graph without materialising rectangular
+        matrices. ``sparse`` is ignored when ``mask=False`` (the full cost
+        matrix is inherently dense).
+        """
         warping_paths = dtw_ndim.warping_paths_fast if HAS_DTW_C else dtw_ndim.warping_paths
         # The compiled DTW requires C-contiguous float64 input; it rejects
         # other dtypes (e.g. float16/float32) that the pure-Python path
@@ -38,8 +56,9 @@ class DTWAlignment(base.AlignmentBase):
             return paths[1:, 1:]
 
         best_path = dtw.best_path(paths)
-        mask = masked_path_from_DTW(paths, best_path)
-        return mask
+        if sparse:
+            return masked_path_triplets_from_DTW(paths, best_path)
+        return masked_path_from_DTW(paths, best_path)
 
     @property
     def name(self) -> str:

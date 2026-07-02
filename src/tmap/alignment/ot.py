@@ -9,7 +9,11 @@ from ott.solvers.linear import sinkhorn
 from typing import Optional
 
 from tmap import base
-from tmap.alignment.masking import masked_path_from_transport_plan_LAP, masked_path_from_transport_plan_argmax
+from tmap.alignment.masking import (
+    masked_path_from_transport_plan_LAP,
+    masked_path_from_transport_plan_argmax,
+    masked_path_triplets_from_transport_plan_LAP,
+)
 
 
 class OTAlignment(base.AlignmentBase):
@@ -19,8 +23,15 @@ class OTAlignment(base.AlignmentBase):
         self.epsilon = epsilon
         self.sinkhorn_threshold = sinkhorn_threshold
 
-    def __call__(self, sequence_i: npt.NDArray, sequence_j: npt.NDArray, *, mask: bool = True):
-        x = jnp.array(sequence_i, dtype=jnp.float32) 
+    def __call__(
+        self,
+        sequence_i: npt.NDArray,
+        sequence_j: npt.NDArray,
+        *,
+        mask: bool = True,
+        sparse: bool = False,
+    ):
+        x = jnp.array(sequence_i, dtype=jnp.float32)
         y = jnp.array(sequence_j, dtype=jnp.float32)
         geom = pointcloud.PointCloud(x, y, epsilon=self.epsilon)
 
@@ -38,8 +49,9 @@ class OTAlignment(base.AlignmentBase):
 
         if not mask:
             return transport_plan
-        mask = masked_path_from_transport_plan_LAP(transport_plan)
-        return mask
+        if sparse:
+            return masked_path_triplets_from_transport_plan_LAP(transport_plan)
+        return masked_path_from_transport_plan_LAP(transport_plan)
 
     @property
     def name(self) -> str:

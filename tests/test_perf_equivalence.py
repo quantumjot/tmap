@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from scipy import sparse
+
 from tmap import temporal
 from tmap.alignment import DTWAlignment
 
@@ -38,10 +40,16 @@ def _make_sequences() -> list[np.ndarray]:
 
 
 def _compute_current():
+    """Run the current pipeline and return *dense* dist/prob for comparison.
+
+    The pipeline is sparse end-to-end since Phase 5; densifying recovers the
+    historical representation (non-edges ``inf`` in dist, zero in prob) so the
+    golden fixtures and invariants below are unchanged.
+    """
     seqs = _make_sequences()
     dist = temporal.calculate_distance_matrix(seqs, DTWAlignment(), mask=True)
     prob = temporal.calculate_high_dimensional_probability_matrix(dist, N_NEIGHBORS)
-    return dist, prob
+    return temporal.densify_distance_matrix(dist), prob.toarray()
 
 
 @pytest.fixture(scope="module")
@@ -113,6 +121,36 @@ def test_pipeline_deterministic():
     d2, p2 = _compute_current()
     np.testing.assert_array_equal(np.where(np.isinf(d1), 0, d1), np.where(np.isinf(d2), 0, d2))
     np.testing.assert_array_equal(p1, p2)
+
+
+# --- dense vs sparse equivalence --------------------------------------------
+
+
+def test_sparse_dist_matches_dense_reference():
+    """The sparse assembly must reproduce the dense semantics exactly."""
+    seqs = _make_sequences()
+    dist_sparse = temporal.calculate_distance_matrix(seqs, DTWAlignment(), mask=True)
+    dist_dense = temporal._calculate_distance_matrix_dense(seqs, DTWAlignment(), mask=True)
+    np.testing.assert_allclose(
+        temporal.densify_distance_matrix(dist_sparse), dist_dense, rtol=1e-6, atol=0
+    )
+
+
+def test_sparse_probability_matches_dense_reference():
+    """Sparse rho/sigma/probability must match the dense computation."""
+    seqs = _make_sequences()
+    dist_sparse = temporal.calculate_distance_matrix(seqs, DTWAlignment(), mask=True)
+    dist_dense = temporal._calculate_distance_matrix_dense(seqs, DTWAlignment(), mask=True)
+
+    prob_sparse = temporal.calculate_high_dimensional_probability_matrix(
+        dist_sparse, N_NEIGHBORS
+    )
+    prob_dense = temporal.calculate_high_dimensional_probability_matrix(
+        dist_dense, N_NEIGHBORS
+    )
+
+    assert sparse.issparse(prob_sparse)
+    np.testing.assert_allclose(prob_sparse.toarray(), prob_dense, rtol=1e-5, atol=1e-8)
 
 
 # --- embedding optimisation guardrail --------------------------------------

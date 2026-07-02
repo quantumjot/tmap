@@ -29,6 +29,8 @@ from typing import Optional
 
 import numpy as np
 
+from scipy import sparse
+
 from tmap import temporal
 from tmap.alignment import DTWAlignment
 from tmap.layout import SpectralLayout
@@ -103,6 +105,13 @@ def benchmark_one(
     t_embed = _time_embedding(prob, n_components, iterations)
 
     dense_bytes = n_nodes * n_nodes * 8
+    if sparse.issparse(prob):
+        nnz = int(prob.nnz)
+        # CSR storage: int32 column index + float64 value per nonzero
+        graph_bytes = nnz * (4 + 8)
+    else:
+        nnz = int(np.count_nonzero(prob))
+        graph_bytes = dense_bytes
     return {
         "n_sequences": len(sequences),
         "n_nodes": n_nodes,
@@ -112,6 +121,8 @@ def benchmark_one(
         "t_embedding_s": round(t_embed, 4),
         "t_total_s": round(t_align + t_prob + t_embed, 4),
         "dense_matrix_mb": round(dense_bytes / 1e6, 1),
+        "nnz": nnz,
+        "graph_mb": round(graph_bytes / 1e6, 2),
     }
 
 
@@ -154,7 +165,8 @@ def main() -> None:
             f"probability {row['t_probability_s']:8.3f}s | "
             f"embedding {row['t_embedding_s']:8.3f}s | "
             f"total {row['t_total_s']:8.3f}s | "
-            f"dense P {row['dense_matrix_mb']:.0f} MB"
+            f"dense P {row['dense_matrix_mb']:.0f} MB | "
+            f"graph {row['graph_mb']:.2f} MB ({row['nnz']} nnz)"
         )
 
     if args.output:
