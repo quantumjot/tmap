@@ -12,7 +12,9 @@ compares the embedding to the high-dimensional input.
 
 Usage
 -----
-    python scripts/eval_baseline.py                      # balanced, DTW
+    python scripts/eval_baseline.py --branching          # recommended substrate
+    python scripts/eval_baseline.py --branching --branch-time 0.25
+    python scripts/eval_baseline.py                      # oscillator, DTW
     python scripts/eval_baseline.py --unbalanced         # variable lifetimes
     python scripts/eval_baseline.py --aligner ot
     python scripts/eval_baseline.py --noise 0.5          # robustness probe
@@ -49,6 +51,8 @@ def run(
     features: int,
     noise: float,
     unbalanced: bool,
+    branching: bool,
+    branch_time: float,
     aligner_name: str,
     n_neighbors: int,
     n_components: int,
@@ -57,15 +61,21 @@ def run(
     seed: int,
     n_triples: int,
 ) -> dict:
-    t = np.linspace(0, 10, length)
-    generator = (
-        simulate.simulate_unbalanced_trajectories
-        if unbalanced
-        else simulate.simulate_trajectories
-    )
-    result = generator(
-        t=t, n=n, n_components=features, noise=noise, seed=seed, return_labels=True
-    )
+    if branching:
+        result = simulate.simulate_branching_trajectories(
+            n=n, length=length, n_components=features, branch_time=branch_time,
+            noise=noise, seed=seed, return_labels=True,
+        )
+    else:
+        generator = (
+            simulate.simulate_unbalanced_trajectories
+            if unbalanced
+            else simulate.simulate_trajectories
+        )
+        result = generator(
+            t=np.linspace(0, 10, length), n=n, n_components=features,
+            noise=noise, seed=seed, return_labels=True,
+        )
     sequences, labels = result[0], result[1]
 
     aligner = build_aligner(aligner_name)
@@ -99,6 +109,8 @@ def run(
             "features": features,
             "noise": noise,
             "unbalanced": unbalanced,
+            "branching": branching,
+            "branch_time": branch_time if branching else None,
             "aligner": aligner_name,
             "n_neighbors": n_neighbors,
             "n_components": n_components,
@@ -128,6 +140,14 @@ def main() -> None:
     p.add_argument("--features", type=int, default=3)
     p.add_argument("--noise", type=float, default=0.0, help="per-component observation noise")
     p.add_argument("--unbalanced", action="store_true", help="variable-lifetime trajectories")
+    p.add_argument(
+        "--branching", action="store_true",
+        help="branching trajectories: shared trunk then divergence (recommended)",
+    )
+    p.add_argument(
+        "--branch-time", type=float, default=0.5,
+        help="fraction traversed before branches separate; 1.0 identical paths, 0.0 independent",
+    )
     p.add_argument("--aligner", type=str, default="dtw", choices=("dtw", "ot"))
     p.add_argument("--neighbors", type=int, default=15)
     p.add_argument("--components", type=int, default=2)
@@ -144,6 +164,8 @@ def main() -> None:
         features=args.features,
         noise=args.noise,
         unbalanced=args.unbalanced,
+        branching=args.branching,
+        branch_time=args.branch_time,
         aligner_name=args.aligner,
         n_neighbors=args.neighbors,
         n_components=args.components,
@@ -154,10 +176,13 @@ def main() -> None:
     )
 
     cfg = report["config"]
+    substrate = (
+        f"branching(branch_time={cfg['branch_time']})" if cfg["branching"]
+        else ("unbalanced oscillator" if cfg["unbalanced"] else "oscillator")
+    )
     print(
         f"{cfg['n_trajectories']} trajectories / {cfg['n_nodes']} nodes, "
-        f"aligner={cfg['aligner']}, noise={cfg['noise']}, "
-        f"unbalanced={cfg['unbalanced']}, k={cfg['k']}"
+        f"{substrate}, aligner={cfg['aligner']}, noise={cfg['noise']}, k={cfg['k']}"
     )
     print("-" * 58)
     for key, value in report["metrics"].items():

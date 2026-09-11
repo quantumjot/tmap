@@ -140,3 +140,104 @@ def test_mis_warp_validates_arguments(kwargs):
     seq = np.zeros((10, 2))
     with pytest.raises(ValueError):
         simulate.mis_warp(seq, **kwargs)
+
+
+# --- branching --------------------------------------------------------------
+
+
+def test_branching_shapes_and_labels():
+    seqs, labels, progress = simulate.simulate_branching_trajectories(
+        n=3, n_branches=3, length=40, seed=0, return_labels=True
+    )
+    assert len(seqs) == 9
+    assert all(s.shape == (40, 3) for s in seqs)
+    assert labels.tolist() == [0, 0, 0, 1, 1, 1, 2, 2, 2]
+    assert progress.shape == (9, 40)
+
+
+def test_branching_default_return_type_is_a_plain_list():
+    seqs = simulate.simulate_branching_trajectories(n=2, seed=0)
+    assert isinstance(seqs, list) and len(seqs) == 6
+
+
+def test_branch_time_controls_path_dissimilarity():
+    """The defining property: one knob spans identical -> fully dissimilar."""
+    def across_branch_spread(branch_time):
+        seqs, labels, _ = simulate.simulate_branching_trajectories(
+            n=4, n_branches=2, branch_time=branch_time, noise=0.0, seed=0,
+            return_labels=True,
+        )
+        ends = np.array([s[-1] for s in seqs])
+        a, b = ends[labels == 0], ends[labels == 1]
+        return float(np.linalg.norm(a.mean(axis=0) - b.mean(axis=0)))
+
+    identical, mixed, independent = (across_branch_spread(t) for t in (1.0, 0.5, 0.0))
+    assert identical < mixed < independent
+    assert identical == pytest.approx(0.0, abs=1e-9)  # one shared path
+
+
+def test_branching_data_is_full_rank():
+    # unlike the oscillator, branches occupy distinct directions in feature space
+    seqs = simulate.simulate_branching_trajectories(n=3, noise=0.0, seed=0)
+    assert np.linalg.matrix_rank(np.concatenate(seqs)) == 3
+
+
+def test_progress_is_monotone_and_normalised():
+    _, _, progress = simulate.simulate_branching_trajectories(
+        n=4, seed=0, return_labels=True
+    )
+    assert np.all(np.diff(progress, axis=1) > 0)
+    assert np.allclose(progress[:, 0], 0.0)
+    assert np.allclose(progress[:, -1], 1.0)
+
+
+def test_speed_jitter_creates_the_warping_problem():
+    # jitter > 0: same geometry, different pacing -> DTW has real work to do
+    _, _, jittered = simulate.simulate_branching_trajectories(
+        n=2, speed_jitter=0.3, seed=0, return_labels=True
+    )
+    assert not np.allclose(jittered[0], jittered[1])
+
+    # jitter == 0: every trajectory shares one time grid
+    _, _, uniform = simulate.simulate_branching_trajectories(
+        n=2, speed_jitter=0.0, seed=0, return_labels=True
+    )
+    assert np.allclose(uniform[0], uniform[1])
+
+
+def test_progress_is_ground_truth_correspondence():
+    """Equal progress on a shared path must mean an equal position."""
+    seqs, _, progress = simulate.simulate_branching_trajectories(
+        n=2, n_branches=2, branch_time=1.0, noise=0.0, speed_jitter=0.3,
+        seed=0, return_labels=True,
+    )
+    # trajectory 0's midpoint, and wherever trajectory 1 reaches the same progress
+    p = progress[0, 20]
+    q = int(np.argmin(np.abs(progress[1] - p)))
+    assert np.allclose(seqs[0][20], seqs[1][q], atol=1e-2)
+
+
+def test_branching_is_reproducible():
+    a = simulate.simulate_branching_trajectories(n=3, seed=11)
+    b = simulate.simulate_branching_trajectories(n=3, seed=11)
+    assert all(np.array_equal(x, y) for x, y in zip(a, b))
+
+
+def test_branching_does_not_disturb_the_global_rng():
+    np.random.seed(0)
+    before = np.random.random()
+    np.random.seed(0)
+    simulate.simulate_branching_trajectories(n=2)
+    assert np.random.random() == before
+
+
+@pytest.mark.parametrize("kwargs,match", [
+    ({"branch_time": 1.5}, "branch_time"),
+    ({"branch_time": -0.1}, "branch_time"),
+    ({"n_components": 1}, "n_components >= 2"),
+    ({"n_branches": 3, "n_components": 2}, "fan out"),
+    ({"speed_jitter": -0.1}, "speed_jitter"),
+])
+def test_branching_validates_arguments(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        simulate.simulate_branching_trajectories(n=2, **kwargs)

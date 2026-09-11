@@ -232,3 +232,126 @@ def mis_warp(
     held = np.repeat(trajectory[index : index + 1], repeat, axis=0)
     out = np.concatenate([trajectory[:index], held, trajectory[index + repeat :]], axis=0)
     return out[:n]
+
+
+def simulate_branching_trajectories(
+    *,
+    n: int = 8,
+    n_branches: int = 3,
+    length: int = 60,
+    n_components: int = 3,
+    branch_time: float = 0.5,
+    separation: float = 3.0,
+    speed_jitter: float = 0.3,
+    noise: float = 0.05,
+    seed: int | None = None,
+    return_labels: bool = False,
+):
+    """Trajectories that share a trunk and then diverge onto distinct branches.
+
+    Built to pose the question tmap exists to answer: which trajectories follow
+    *similar paths through feature space*, and which follow dissimilar ones.
+    Two properties make it a real test rather than a smoke test.
+
+    **Geometry is decoupled from timing.** Every trajectory on a branch follows
+    the same geometric route, but each traverses it at its own uneven speed
+    (``speed_jitter``). Same-branch trajectories are therefore only similar
+    *after* time warping, which is precisely the correspondence DTW/OT must
+    recover; a method that ignores warping cannot score well by accident.
+
+    **One knob spans the whole similar/dissimilar axis.** ``branch_time`` is the
+    fraction of the route traversed before branches separate:
+
+    - ``1.0`` — every trajectory follows an identical path (maximally similar);
+      correspondences should be strong everywhere.
+    - ``0.5`` — a shared trunk then divergence; correspondences should be strong
+      early and weak late. This is the interesting regime.
+    - ``0.0`` — independent routes from the first timepoint (maximally
+      dissimilar); little should correspond.
+
+    Unlike :func:`simulate_trajectories`, the branches occupy genuinely
+    different regions of feature space rather than overlapping ranges of one
+    shared line, so group separation is well defined and the data is full rank.
+
+    Parameters
+    ----------
+    n : int
+        Trajectories *per branch*; the total is ``n * n_branches``.
+    n_branches : int
+        Number of distinct routes. Requires ``n_components >= 3`` for more than
+        two, since the branches fan out in a plane orthogonal to the trunk.
+    branch_time : float
+        Fraction along the route at which branches separate, in ``[0, 1]``.
+    separation : float
+        How far branches travel apart after splitting, relative to the unit
+        trunk. Larger is easier to resolve.
+    speed_jitter : float
+        Per-timepoint traversal-speed variation. ``0.0`` makes every trajectory
+        share one time grid, removing the warping problem.
+    noise : float
+        Additive per-observation Gaussian noise.
+
+    Returns
+    -------
+    trajectories : list of arrays
+        ``(length, n_components)`` each.
+    labels : npt.NDArray
+        Branch index per trajectory. Only when ``return_labels=True``.
+    progress : npt.NDArray
+        ``(n * n_branches, length)`` of arc-length positions in ``[0, 1]``.
+        This is **ground-truth correspondence**: timepoint ``p`` of trajectory
+        ``i`` genuinely matches timepoint ``q`` of trajectory ``j`` when
+        ``progress[i, p] == progress[j, q]``. Only when ``return_labels=True``.
+    """
+    if not 0.0 <= branch_time <= 1.0:
+        raise ValueError(f"branch_time must be in [0, 1], got {branch_time}")
+    if n_components < 2:
+        raise ValueError(f"need n_components >= 2, got {n_components}")
+    if n_branches > 2 and n_components < 3:
+        raise ValueError(
+            f"n_branches > 2 needs n_components >= 3 to fan out, got {n_components}"
+        )
+    if speed_jitter < 0.0:
+        raise ValueError(f"speed_jitter must be >= 0, got {speed_jitter}")
+
+    rng = np.random.default_rng(seed)
+
+    # Trunk runs along axis 0; branches fan out evenly in the orthogonal
+    # (1, 2) plane, so every pair of branches is equally dissimilar.
+    trunk = np.zeros(n_components)
+    trunk[0] = 1.0
+
+    branch_dirs = np.zeros((n_branches, n_components))
+    angles = np.linspace(0.0, 2.0 * np.pi, n_branches, endpoint=False)
+    for b, angle in enumerate(angles):
+        branch_dirs[b, 1] = np.cos(angle)
+        if n_components > 2:
+            branch_dirs[b, 2] = np.sin(angle)
+
+    def route(s: npt.NDArray, branch: int) -> npt.NDArray:
+        """Position along the route at arc-length fractions ``s``."""
+        past = np.maximum(s - branch_time, 0.0)[:, None]
+        return s[:, None] * trunk + past * separation * branch_dirs[branch]
+
+    trajectories = []
+    labels = []
+    progress = []
+    for branch in range(n_branches):
+        for _ in range(n):
+            # a monotone, uneven time grid: same geometry, different pacing
+            steps = 1.0 + speed_jitter * rng.standard_normal(length - 1)
+            steps = np.clip(steps, 1e-3, None)
+            s = np.concatenate([[0.0], np.cumsum(steps)])
+            s = s / s[-1]
+
+            traj = route(s, branch)
+            if noise:
+                traj = traj + rng.standard_normal(traj.shape) * noise
+
+            trajectories.append(traj)
+            labels.append(branch)
+            progress.append(s)
+
+    if return_labels:
+        return trajectories, np.asarray(labels), np.asarray(progress)
+    return trajectories
