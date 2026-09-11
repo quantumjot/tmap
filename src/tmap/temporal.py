@@ -157,7 +157,7 @@ def calculate_distance_matrix(
     aligner: base.AlignmentBase,
     *,
     mask: bool = True,
-    n_candidates: Optional[int] = None,
+    n_candidates: Optional[int] = base.N_CANDIDATES,
     n_resample: int = 16,
     n_jobs: Optional[int] = None,
 ) -> sparse.csr_matrix:
@@ -173,9 +173,11 @@ def calculate_distance_matrix(
         Whether to mask the transport plan to the optimal path.
     n_candidates : int, optional
         Align only each trajectory's ``n_candidates`` nearest neighbours in
-        descriptor space rather than all pairs. ``None`` (default) aligns every
-        pair. See :func:`candidate_pairs`; the number of retained pairs is
-        reported on the progress bar so truncation is never silent.
+        descriptor space rather than all pairs. Defaults to
+        :data:`tmap.base.N_CANDIDATES`; pass ``None`` to align every pair. A
+        no-op for ``K <= n_candidates + 1``. See :func:`candidate_pairs`; the
+        number of retained pairs is reported on the progress bar so truncation
+        is never silent.
     n_resample : int
         Descriptor resolution used for screening. Ignored when ``n_candidates``
         is ``None``.
@@ -709,8 +711,8 @@ class TemporalMAP(base.MapperBase):
     n_candidates : int, optional
         Align only each trajectory's ``n_candidates`` nearest neighbours instead
         of all pairs, making alignment ``O(K * c)`` rather than ``O(K ** 2)``.
-        ``None`` (default) aligns every pair. Approximate — see
-        :func:`candidate_pairs`.
+        Defaults to :data:`tmap.base.N_CANDIDATES` (10); pass ``None`` to align
+        every pair. Approximate — see :func:`candidate_pairs`.
     random_state : int, optional
         Seed for the stochastic optimiser; fixed seed gives deterministic
         embeddings.
@@ -742,7 +744,7 @@ class TemporalMAP(base.MapperBase):
         aligner: Optional[base.AlignmentBase] = None,
         mask: bool = True,
         n_jobs: Optional[int] = None,
-        n_candidates: Optional[int] = None,
+        n_candidates: Optional[int] = base.N_CANDIDATES,
         optimizer: str = "sampled",
         n_negative: int = base.N_NEGATIVE,
         repulsion_strength: float = base.REPULSION_STRENGTH,

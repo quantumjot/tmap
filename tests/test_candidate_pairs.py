@@ -107,7 +107,9 @@ def test_screening_prefers_same_branch_partners():
 
 
 def test_screened_graph_is_a_subgraph_with_measurable_recall(sequences):
-    full = temporal.calculate_distance_matrix(sequences, DTWAlignment(), mask=True)
+    full = temporal.calculate_distance_matrix(
+        sequences, DTWAlignment(), mask=True, n_candidates=None
+    )
     screened = temporal.calculate_distance_matrix(
         sequences, DTWAlignment(), mask=True, n_candidates=3
     )
@@ -128,10 +130,27 @@ def test_screened_graph_still_yields_a_valid_probability_matrix(sequences):
     assert prob.min() >= 0.0 and prob.max() <= 1.0 + 1e-12
 
 
-def test_temporalmap_default_is_all_pairs_and_option_reaches_the_graph(sequences):
-    assert temporal.TemporalMAP().n_candidates is None
-    a = temporal.TemporalMAP(n_components=2, random_state=0)
+def test_temporalmap_defaults_to_screening_and_option_reaches_the_graph(sequences):
+    from tmap import base
+
+    assert temporal.TemporalMAP().n_candidates == base.N_CANDIDATES
+    a = temporal.TemporalMAP(n_components=2, random_state=0, n_candidates=None)
     b = temporal.TemporalMAP(n_components=2, random_state=0, n_candidates=2)
     for mapper in (a, b):
         mapper.fit(sequences, max_iterations=1)
     assert b.distance_matrix.nnz < a.distance_matrix.nnz
+
+
+def test_screening_default_is_a_no_op_for_small_K():
+    """The default must not truncate anything for typical small inputs.
+
+    candidate_pairs falls back to all pairs once n_candidates >= K - 1, so a
+    default of 10 only engages from K = 12 upward.
+    """
+    from tmap import base
+
+    for K in (3, 6, base.N_CANDIDATES + 1):
+        seqs = simulate_branching_trajectories(
+            n=max(1, K // 3), length=20, noise=0.05, seed=0
+        )[:K]
+        assert len(temporal.candidate_pairs(seqs)) == len(seqs) * (len(seqs) - 1) // 2
