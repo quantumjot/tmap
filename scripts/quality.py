@@ -1,11 +1,16 @@
 #!/usr/bin/env python
 """Embedding quality comparison: sampled vs dense optimiser.
 
-Computes trustworthiness (sklearn) and k-NN neighbourhood preservation of the
+Computes trustworthiness and k-NN neighbourhood preservation of the
 low-dimensional embedding with respect to the concatenated high-dimensional
 input, for both optimisers on the same graph and initial layout. Used to
 verify that the O(nnz) sampled optimiser does not degrade embedding quality
 relative to the original O(N^2) dense path.
+
+Metrics live in :mod:`tmap.evaluate` so that this script, the test suite and
+``scripts/eval_baseline.py`` all score identically. For a broader battery
+(supervised group separation, temporal and directional coherence) use
+``scripts/eval_baseline.py``.
 
 Usage
 -----
@@ -19,23 +24,11 @@ import argparse
 
 import numpy as np
 
-from sklearn.manifold import trustworthiness
-from sklearn.neighbors import NearestNeighbors
-
 from tmap import temporal
 from tmap.alignment import DTWAlignment
+from tmap.evaluate import knn_preservation, trustworthiness
 
 from benchmark import generate_sequences, load_real_data
-
-
-def knn_preservation(x: np.ndarray, y: np.ndarray, k: int = 15) -> float:
-    """Mean fraction of each point's high-D k-NN preserved in the embedding."""
-    nn_x = NearestNeighbors(n_neighbors=k + 1).fit(x).kneighbors(return_distance=False)
-    nn_y = NearestNeighbors(n_neighbors=k + 1).fit(y).kneighbors(return_distance=False)
-    overlap = [
-        len(set(a[1:]) & set(b[1:])) / k for a, b in zip(nn_x, nn_y)
-    ]
-    return float(np.mean(overlap))
 
 
 def compare(
