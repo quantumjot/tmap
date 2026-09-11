@@ -47,6 +47,7 @@ __all__ = [
     "correspondence_map",
     "transitivity_violation",
     "edge_recall",
+    "correspondence_contrast",
     "summarize",
 ]
 
@@ -290,6 +291,92 @@ def edge_recall(full, screened) -> float:
     b.data = np.ones_like(b.data)
     kept = a.multiply(b)
     return float(kept.nnz / full.nnz)
+
+
+def correspondence_contrast(
+    y: npt.NDArray,
+    *,
+    seq_lengths: Sequence[int],
+    progress: npt.NDArray,
+    labels: npt.NDArray,
+    split_after: Optional[float] = None,
+) -> dict:
+    """Do nodes that genuinely correspond bind, while non-corresponding ones don't?
+
+    Needs ground-truth correspondence, i.e. the ``progress`` array from
+    :func:`tmap.simulate.simulate_branching_trajectories`: node ``p`` of
+    trajectory ``i`` truly matches node ``q`` of ``j`` when their progress is
+    equal, so matches are found by nearest progress rather than by index.
+
+    **Why this metric exists.** ``knn_purity`` and ``temporal_coherence`` are
+    both inflated by anything that suppresses inter-trajectory edges, because a
+    node surrounded only by its own trajectory scores well on both. Neither can
+    referee a change that deliberately alters cross-trajectory binding. This
+    metric contrasts should-match against shouldn't-match pairs, so keeping
+    trajectories apart cannot win: that raises *both* terms and leaves the ratio
+    flat.
+
+    Parameters
+    ----------
+    progress : npt.NDArray
+        ``(n_trajectories, length)`` arc-length positions in ``[0, 1]``.
+    labels : npt.NDArray
+        Per-trajectory group. Same-group pairs should correspond; different-group
+        pairs should not, at least after they diverge.
+    split_after : float, optional
+        Restrict shouldn't-match pairs to progress beyond this value, e.g. the
+        generator's ``branch_time``. Before divergence different groups still
+        share a route, so counting them would penalise a correct embedding.
+        ``None`` uses every timepoint.
+
+    Returns
+    -------
+    dict
+        ``should_match_distance`` (lower is better), ``non_match_distance``, and
+        ``contrast`` = their ratio (higher is better). Distances are normalised
+        by the embedding's RMS radius, so they are scale-free.
+    """
+    labels = np.asarray(labels)
+    progress = np.asarray(progress)
+    seq_lengths = list(seq_lengths)
+    if len(seq_lengths) != labels.shape[0]:
+        raise ValueError(
+            f"{len(seq_lengths)} sequences but {labels.shape[0]} labels"
+        )
+
+    offsets = np.concatenate([[0], np.cumsum(seq_lengths)]).astype(np.int64)
+    scale = np.sqrt(np.mean(np.sum((y - y.mean(axis=0)) ** 2, axis=1)))
+    if scale == 0:
+        return {
+            "should_match_distance": float("nan"),
+            "non_match_distance": float("nan"),
+            "contrast": float("nan"),
+        }
+
+    should, non_match = [], []
+    for i in range(len(seq_lengths)):
+        for j in range(i + 1, len(seq_lengths)):
+            p_i, p_j = progress[i][: seq_lengths[i]], progress[j][: seq_lengths[j]]
+            # ground-truth pairing: nearest progress, not nearest index
+            match = np.abs(p_i[:, None] - p_j[None, :]).argmin(axis=1)
+            u = offsets[i] + np.arange(seq_lengths[i])
+            v = offsets[j] + match
+            d = np.linalg.norm(y[u] - y[v], axis=1) / scale
+
+            if labels[i] == labels[j]:
+                should.append(d.mean())
+            else:
+                keep = p_i > split_after if split_after is not None else np.ones(d.size, bool)
+                if keep.any():
+                    non_match.append(d[keep].mean())
+
+    s = float(np.mean(should)) if should else float("nan")
+    n = float(np.mean(non_match)) if non_match else float("nan")
+    return {
+        "should_match_distance": s,
+        "non_match_distance": n,
+        "contrast": n / s if (should and non_match and s > 0) else float("nan"),
+    }
 
 
 # --- battery ---------------------------------------------------------------
