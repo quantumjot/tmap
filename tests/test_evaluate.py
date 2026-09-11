@@ -183,3 +183,81 @@ def test_summarize_skips_absent_inputs_and_includes_present_ones():
         y, seq_lengths=[10, 10], labels=np.array([0, 1]), x=y.copy(), k=3
     )
     assert {"knn_purity", "silhouette", "knn_preservation", "trustworthiness"} <= set(full)
+
+
+# --- correspondence contrast -----------------------------------------------
+
+
+def _branching_truth(**kwargs):
+    from tmap.simulate import simulate_branching_trajectories
+    return simulate_branching_trajectories(
+        n=3, n_branches=2, length=20, noise=0.0, seed=0, return_labels=True, **kwargs
+    )
+
+
+def test_correspondence_contrast_rewards_a_faithful_embedding():
+    """Embedding the true geometry should bind matches and separate non-matches."""
+    seqs, labels, progress = _branching_truth(branch_time=0.5)
+    y = np.concatenate(seqs)[:, :2]  # the true layout, projected
+    out = evaluate.correspondence_contrast(
+        y, seq_lengths=[s.shape[0] for s in seqs], progress=progress,
+        labels=labels, split_after=0.5,
+    )
+    # not exactly 0: same-branch trajectories share the geometry but are
+    # sampled at different speeds, so nearest-progress matching carries a
+    # discretisation residual of about one timestep
+    assert out["should_match_distance"] < 0.08
+    assert out["non_match_distance"] > 10 * out["should_match_distance"]
+    assert out["contrast"] > 10
+
+
+def test_correspondence_contrast_is_near_one_for_a_random_embedding():
+    seqs, labels, progress = _branching_truth(branch_time=0.5)
+    rng = np.random.default_rng(0)
+    y = rng.standard_normal((sum(s.shape[0] for s in seqs), 2))
+    out = evaluate.correspondence_contrast(
+        y, seq_lengths=[s.shape[0] for s in seqs], progress=progress,
+        labels=labels, split_after=0.5,
+    )
+    # no structure: matches and non-matches are equally far apart
+    assert out["contrast"] == pytest.approx(1.0, abs=0.3)
+
+
+def test_correspondence_contrast_ignores_thread_isolation():
+    """Collapsing each trajectory to a point must not win: both terms rise."""
+    seqs, labels, progress = _branching_truth(branch_time=0.5)
+    lengths = [s.shape[0] for s in seqs]
+    offsets = np.concatenate([[0], np.cumsum(lengths)])
+    # every trajectory collapsed onto its own point, placed at random so the
+    # layout encodes no information about which trajectories should correspond
+    rng = np.random.default_rng(3)
+    centres = rng.standard_normal((len(lengths), 2)) * 10.0
+    y = np.zeros((sum(lengths), 2))
+    for i in range(len(lengths)):
+        y[offsets[i]:offsets[i+1]] = centres[i]
+    out = evaluate.correspondence_contrast(
+        y, seq_lengths=lengths, progress=progress, labels=labels, split_after=0.5,
+    )
+    # isolated threads are equidistant regardless of whether they should match,
+    # so the contrast collapses toward 1 despite perfectly tidy trajectories
+    assert out["contrast"] == pytest.approx(1.0, abs=0.5)
+
+
+def test_correspondence_contrast_rejects_label_mismatch():
+    seqs, labels, progress = _branching_truth()
+    with pytest.raises(ValueError, match="sequences but"):
+        evaluate.correspondence_contrast(
+            np.zeros((sum(s.shape[0] for s in seqs), 2)),
+            seq_lengths=[s.shape[0] for s in seqs], progress=progress,
+            labels=labels[:-1],
+        )
+
+
+def test_correspondence_contrast_nan_without_non_matching_pairs():
+    seqs, labels, progress = _branching_truth()
+    out = evaluate.correspondence_contrast(
+        np.random.default_rng(0).standard_normal((sum(s.shape[0] for s in seqs), 2)),
+        seq_lengths=[s.shape[0] for s in seqs], progress=progress,
+        labels=np.zeros_like(labels),  # one group only
+    )
+    assert np.isnan(out["contrast"])
