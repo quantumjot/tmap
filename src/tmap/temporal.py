@@ -246,20 +246,38 @@ def high_dimensional_probability(d: npt.NDArray, sigma: float) -> npt.NDArray:
 
 
 def estimate_sigma(
-    d: npt.NDArray, n_neighbors: int, iterations: int = 20, tolerance: float = 1e-5
+    d: npt.NDArray,
+    n_neighbors: int,
+    iterations: int = 20,
+    tolerance: float = 1e-5,
+    *,
+    count_self: bool = True,
 ):
     """Binary search to estimate a value of sigma.
 
     Parameters
     ----------
+    d : npt.NDArray
+        One row of the distance matrix with ``rho`` already subtracted.
+    n_neighbors : int
+        Target effective number of neighbours.
+    count_self : bool
+        Whether the self-membership counts toward the ``log2(k)`` target. The
+        row's self entry has a clipped distance of 0 and so contributes exactly
+        1.0. ``True`` (default) is the historical behaviour and makes the
+        *neighbour* membership sum land on ``log2(k) - 1 == log2(k / 2)``, i.e.
+        half UMAP's effective neighbourhood. ``False`` matches UMAP, which
+        targets ``log2(k)`` over the neighbours alone.
 
     Returns
     -------
+    sigma : float
     """
 
     def k_of_sigma(sigma):
         prob = high_dimensional_probability(d, sigma)
-        return np.power(2, np.clip(np.sum(prob), 0, 31.0))
+        total = np.sum(prob) - (0.0 if count_self else 1.0)
+        return np.power(2, np.clip(total, 0, 31.0))
 
     sigma_lower_estimate = base.SIGMA_LOW_ESTIMATE
     sigma_upper_estimate = base.SIGMA_HIGH_ESTIMATE
@@ -284,6 +302,8 @@ def estimate_sigma_vectorized(
     n_neighbors: int,
     iterations: int = 20,
     sigma_tol: Optional[float] = None,
+    *,
+    count_self: bool = True,
 ) -> npt.NDArray:
     """Binary search for per-row sigma, for all rows at once.
 
@@ -302,6 +322,9 @@ def estimate_sigma_vectorized(
         Opt-in early stop: break once every row's bisection bracket is
         narrower than ``sigma_tol``. ``None`` (default) always runs the fixed
         number of iterations and is bit-identical to the original behaviour.
+    count_self : bool
+        Whether each row's self-membership counts toward the ``log2(k)`` target.
+        See :func:`estimate_sigma`.
 
     Returns
     -------
@@ -310,6 +333,9 @@ def estimate_sigma_vectorized(
     """
     n = d.shape[0]
     d_clipped = np.clip(d, 0.0, np.inf)
+    # the diagonal is the self entry; its clipped distance is 0, so it
+    # contributes exp(0) == 1 to the row sum regardless of sigma
+    self_term = 0.0 if count_self else 1.0
     lower = np.full(n, base.SIGMA_LOW_ESTIMATE, dtype=np.float64)
     upper = np.full(n, base.SIGMA_HIGH_ESTIMATE, dtype=np.float64)
     sigma = (lower + upper) / 2
@@ -317,7 +343,7 @@ def estimate_sigma_vectorized(
     for _ in range(iterations):
         sigma = (lower + upper) / 2
         prob = np.exp(-d_clipped / sigma[:, None])
-        k = np.power(2.0, np.clip(prob.sum(axis=1), 0, 31.0))
+        k = np.power(2.0, np.clip(prob.sum(axis=1) - self_term, 0, 31.0))
         below = k < n_neighbors
         lower = np.where(below, sigma, lower)
         upper = np.where(below, upper, sigma)
@@ -330,6 +356,9 @@ def estimate_sigma_vectorized(
 def calculate_high_dimensional_probability_matrix(
     dist,
     n_neighbors: int,
+    *,
+    symmetrize: str = "mean",
+    count_self: bool = True,
 ):
     """Calculate the high dimensional probability matrix from the adjacency
     matrix representation of the graph.
@@ -341,6 +370,15 @@ def calculate_high_dimensional_probability_matrix(
         :func:`calculate_distance_matrix`) produces a sparse probability
         matrix; dense input keeps the historical dense path.
     n_neighbors : int
+    symmetrize : str
+        ``"mean"`` (default, historical) uses ``(V + V') / 2``; ``"union"`` uses
+        the fuzzy set union ``V + V' - V * V'``, UMAP's t-conorm. See
+        :func:`symmetrize_mean` and :func:`symmetrize_fuzzy_union`.
+    count_self : bool
+        Whether each row's self-membership counts toward the ``log2(k)``
+        bandwidth target. ``True`` (default) is historical and halves the
+        effective neighbourhood; ``False`` matches UMAP. See
+        :func:`estimate_sigma`.
 
     Returns
     -------
@@ -349,8 +387,12 @@ def calculate_high_dimensional_probability_matrix(
         diagonal; absent sparse entries are exactly the zeros of the dense
         form (non-edges have probability ``exp(-inf) == 0``).
     """
+    symmetrize_fn = _resolve_symmetrize(symmetrize)
+
     if sparse.issparse(dist):
-        return _sparse_probability_matrix(dist.tocsr(), n_neighbors)
+        return _sparse_probability_matrix(
+            dist.tocsr(), n_neighbors, symmetrize=symmetrize, count_self=count_self
+        )
 
     # per-row nearest-neighbour distance (rho). Each row has exactly one zero
     # (the diagonal), so the second-smallest entry is the nearest neighbour.
@@ -360,15 +402,23 @@ def calculate_high_dimensional_probability_matrix(
     # shift each row by its rho, estimate all sigmas at once, then form the
     # probabilities in a single vectorised exp instead of a Python row loop.
     d = dist - rho[:, None]
-    sigma = estimate_sigma_vectorized(d, n_neighbors)
+    sigma = estimate_sigma_vectorized(d, n_neighbors, count_self=count_self)
     prob = np.exp(-np.clip(d, 0.0, np.inf) / sigma[:, None])
 
-    # make the distances compatible by enforcing symmetry
-    prob = symmetrize_probability_matrix_umap(prob)
+    # make the distances compatible by enforcing symmetry. The diagonal is
+    # exactly 1 beforehand, and both symmetrisations map 1 -> 1, so the unit
+    # diagonal survives either choice.
+    prob = symmetrize_fn(prob)
     return prob
 
 
-def _sparse_probability_matrix(dist: sparse.csr_matrix, n_neighbors: int) -> sparse.csr_matrix:
+def _sparse_probability_matrix(
+    dist: sparse.csr_matrix,
+    n_neighbors: int,
+    *,
+    symmetrize: str = "mean",
+    count_self: bool = True,
+) -> sparse.csr_matrix:
     """Sparse-native equivalent of the dense probability computation.
 
     Operates only on the stored edges; the maths matches the dense path
@@ -391,14 +441,21 @@ def _sparse_probability_matrix(dist: sparse.csr_matrix, n_neighbors: int) -> spa
     rho = np.minimum.reduceat(dist.data, indptr[:-1])
 
     d = np.clip(dist.data - rho[row_ids], 0.0, np.inf)
-    sigma = _estimate_sigma_sparse(d, indptr, row_ids, n, n_neighbors)
+    sigma = _estimate_sigma_sparse(
+        d, indptr, row_ids, n, n_neighbors, count_self=count_self
+    )
     prob_data = np.exp(-d / sigma[row_ids])
 
     prob = sparse.csr_matrix(
         (prob_data, dist.indices.copy(), indptr.copy()), shape=(n, n)
     )
-    # symmetrise (UMAP mean) and add the unit diagonal
-    prob = (prob + prob.T) * 0.5
+    # Symmetrise the off-diagonal structure, then add the unit diagonal. The
+    # dense path symmetrises a matrix that already carries diag == 1; both
+    # symmetrisations map 1 -> 1, so adding I afterwards here is equivalent.
+    if symmetrize == "union":
+        prob = prob + prob.T - prob.multiply(prob.T)
+    else:
+        prob = (prob + prob.T) * 0.5
     prob = (prob + sparse.identity(n, format="csr")).tocsr()
     prob.sort_indices()
     return prob
@@ -412,13 +469,18 @@ def _estimate_sigma_sparse(
     n_neighbors: int,
     iterations: int = 20,
     sigma_tol: Optional[float] = None,
+    *,
+    count_self: bool = True,
 ) -> npt.NDArray:
     """Per-row sigma bisection over the stored edges only.
 
     Identical to :func:`estimate_sigma_vectorized` except the per-row
     probability sum runs over the row's stored edges plus 1.0 for the
     diagonal, instead of a full dense row (whose non-edges contribute zero).
-    ``sigma_tol`` behaves as in :func:`estimate_sigma_vectorized`.
+    ``sigma_tol`` and ``count_self`` behave as in
+    :func:`estimate_sigma_vectorized`; with ``count_self=False`` the diagonal's
+    1.0 is simply not added, which is why this path stays equivalent to the
+    dense one.
     """
     lower = np.full(n, base.SIGMA_LOW_ESTIMATE, dtype=np.float64)
     upper = np.full(n, base.SIGMA_HIGH_ESTIMATE, dtype=np.float64)
@@ -427,7 +489,10 @@ def _estimate_sigma_sparse(
     for _ in range(iterations):
         sigma = (lower + upper) / 2
         prob = np.exp(-d / sigma[row_ids])
-        row_sum = np.add.reduceat(prob, indptr[:-1]) + 1.0  # +1.0 = diagonal
+        # +1.0 = the diagonal, included in the target only when count_self
+        row_sum = np.add.reduceat(prob, indptr[:-1])
+        if count_self:
+            row_sum = row_sum + 1.0
         k = np.power(2.0, np.clip(row_sum, 0, 31.0))
         below = k < n_neighbors
         lower = np.where(below, sigma, lower)
@@ -438,12 +503,40 @@ def _estimate_sigma_sparse(
     return sigma
 
 
-def symmetrize_probability_matrix_tsne(prob: npt.NDArray) -> npt.NDArray:
+def symmetrize_fuzzy_union(prob: npt.NDArray) -> npt.NDArray:
+    """Fuzzy set union (probabilistic t-conorm): ``V + V' - V * V'``.
+
+    UMAP's theoretically motivated symmetrisation: the membership strength of an
+    edge is the probability that *either* direction exists, treating the two as
+    independent.
+    """
     return prob + np.transpose(prob) - np.multiply(prob, np.transpose(prob))
 
 
-def symmetrize_probability_matrix_umap(prob: npt.NDArray) -> npt.NDArray:
+def symmetrize_mean(prob: npt.NDArray) -> npt.NDArray:
+    """Arithmetic mean: ``(V + V') / 2``. The t-SNE-style choice."""
     return (prob + np.transpose(prob)) / 2
+
+
+# Historical names, retained for compatibility. Note they are *inverted* with
+# respect to the literature: the function named ``..._tsne`` computes UMAP's
+# fuzzy union, and the one named ``..._umap`` computes the t-SNE-style mean.
+# Each alias preserves the behaviour its old name had, so existing callers are
+# unaffected; prefer the descriptive names above.
+symmetrize_probability_matrix_tsne = symmetrize_fuzzy_union
+symmetrize_probability_matrix_umap = symmetrize_mean
+
+
+SYMMETRIZE = {"mean": symmetrize_mean, "union": symmetrize_fuzzy_union}
+
+
+def _resolve_symmetrize(symmetrize: str):
+    try:
+        return SYMMETRIZE[symmetrize]
+    except KeyError:
+        raise ValueError(
+            f"unknown symmetrize: {symmetrize!r} (expected one of {sorted(SYMMETRIZE)})"
+        ) from None
 
 
 def find_hyperparameters(min_dist: float):
@@ -504,6 +597,13 @@ class TemporalMAP(base.MapperBase):
     random_state : int, optional
         Seed for the stochastic optimiser; fixed seed gives deterministic
         embeddings.
+    symmetrize : str
+        How the directed membership matrix is made symmetric: ``"mean"``
+        (default, historical) or ``"union"`` for UMAP's fuzzy set union.
+    count_self : bool
+        Whether the self-membership counts toward the ``log2(n_neighbors)``
+        bandwidth target. ``True`` (default, historical) halves the effective
+        neighbourhood; ``False`` matches UMAP. See :func:`estimate_sigma`.
 
     Attributes
     ----------
@@ -527,7 +627,12 @@ class TemporalMAP(base.MapperBase):
         n_negative: int = base.N_NEGATIVE,
         repulsion_strength: float = base.REPULSION_STRENGTH,
         random_state: Optional[int] = None,
+        symmetrize: str = "mean",
+        count_self: bool = True,
     ):
+        _resolve_symmetrize(symmetrize)  # fail fast on a bad value
+        self.symmetrize = symmetrize
+        self.count_self = count_self
         self.n_neighbors = n_neighbors
         self.min_dist = min_dist
         self.n_components = n_components
@@ -574,7 +679,10 @@ class TemporalMAP(base.MapperBase):
             _ = self.calculate_distance_matrix(sequences)
 
         prob = calculate_high_dimensional_probability_matrix(
-            self.distance_matrix, self.n_neighbors
+            self.distance_matrix,
+            self.n_neighbors,
+            symmetrize=self.symmetrize,
+            count_self=self.count_self,
         )
 
         self._P = prob
