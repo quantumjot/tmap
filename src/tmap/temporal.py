@@ -251,7 +251,7 @@ def estimate_sigma(
     iterations: int = 20,
     tolerance: float = 1e-5,
     *,
-    count_self: bool = True,
+    count_self: bool = False,
 ):
     """Binary search to estimate a value of sigma.
 
@@ -264,10 +264,17 @@ def estimate_sigma(
     count_self : bool
         Whether the self-membership counts toward the ``log2(k)`` target. The
         row's self entry has a clipped distance of 0 and so contributes exactly
-        1.0. ``True`` (default) is the historical behaviour and makes the
-        *neighbour* membership sum land on ``log2(k) - 1 == log2(k / 2)``, i.e.
-        half UMAP's effective neighbourhood. ``False`` matches UMAP, which
-        targets ``log2(k)`` over the neighbours alone.
+        1.0.
+
+        ``False`` (default) matches UMAP: the *neighbour* memberships alone sum
+        to ``log2(k)``, so ``n_neighbors`` means what UMAP means by it.
+
+        ``True`` is the historical tmap behaviour and makes the neighbour sum
+        land on ``log2(k) - 1 == log2(k / 2)``, i.e. **half** the nominal
+        neighbourhood. It is exactly equivalent to ``count_self=False`` at
+        ``n_neighbors / 2`` — the setting is a reparameterisation of
+        ``n_neighbors``, not an independent knob — so it is retained only for
+        reproducing pre-existing results.
 
     Returns
     -------
@@ -303,7 +310,7 @@ def estimate_sigma_vectorized(
     iterations: int = 20,
     sigma_tol: Optional[float] = None,
     *,
-    count_self: bool = True,
+    count_self: bool = False,
 ) -> npt.NDArray:
     """Binary search for per-row sigma, for all rows at once.
 
@@ -358,7 +365,7 @@ def calculate_high_dimensional_probability_matrix(
     n_neighbors: int,
     *,
     symmetrize: str = "mean",
-    count_self: bool = True,
+    count_self: bool = False,
 ):
     """Calculate the high dimensional probability matrix from the adjacency
     matrix representation of the graph.
@@ -376,9 +383,9 @@ def calculate_high_dimensional_probability_matrix(
         :func:`symmetrize_mean` and :func:`symmetrize_fuzzy_union`.
     count_self : bool
         Whether each row's self-membership counts toward the ``log2(k)``
-        bandwidth target. ``True`` (default) is historical and halves the
-        effective neighbourhood; ``False`` matches UMAP. See
-        :func:`estimate_sigma`.
+        bandwidth target. ``False`` (default) matches UMAP; ``True`` reproduces
+        the historical tmap behaviour, which halves the effective
+        neighbourhood. See :func:`estimate_sigma`.
 
     Returns
     -------
@@ -417,7 +424,7 @@ def _sparse_probability_matrix(
     n_neighbors: int,
     *,
     symmetrize: str = "mean",
-    count_self: bool = True,
+    count_self: bool = False,
 ) -> sparse.csr_matrix:
     """Sparse-native equivalent of the dense probability computation.
 
@@ -470,7 +477,7 @@ def _estimate_sigma_sparse(
     iterations: int = 20,
     sigma_tol: Optional[float] = None,
     *,
-    count_self: bool = True,
+    count_self: bool = False,
 ) -> npt.NDArray:
     """Per-row sigma bisection over the stored edges only.
 
@@ -602,8 +609,10 @@ class TemporalMAP(base.MapperBase):
         (default, historical) or ``"union"`` for UMAP's fuzzy set union.
     count_self : bool
         Whether the self-membership counts toward the ``log2(n_neighbors)``
-        bandwidth target. ``True`` (default, historical) halves the effective
-        neighbourhood; ``False`` matches UMAP. See :func:`estimate_sigma`.
+        bandwidth target. ``False`` (default) matches UMAP, so ``n_neighbors``
+        carries UMAP's meaning; ``True`` reproduces the historical tmap
+        behaviour, which halves the effective neighbourhood. See
+        :func:`estimate_sigma`.
 
     Attributes
     ----------
@@ -628,7 +637,7 @@ class TemporalMAP(base.MapperBase):
         repulsion_strength: float = base.REPULSION_STRENGTH,
         random_state: Optional[int] = None,
         symmetrize: str = "mean",
-        count_self: bool = True,
+        count_self: bool = False,
     ):
         _resolve_symmetrize(symmetrize)  # fail fast on a bad value
         self.symmetrize = symmetrize

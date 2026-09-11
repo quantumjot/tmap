@@ -21,13 +21,13 @@
     "python": "3.11.9"
   },
   "metrics": {
-    "graph_neighbor_preservation": 0.3699,
-    "knn_preservation": 0.2643,
-    "knn_purity": 0.6617,
-    "silhouette": -0.0088,
-    "temporal_coherence": 0.6031,
+    "graph_neighbor_preservation": 0.3778,
+    "knn_preservation": 0.2711,
+    "knn_purity": 0.6235,
+    "silhouette": -0.0085,
+    "temporal_coherence": 0.4202,
     "transitivity_violation": 0.026,
-    "trustworthiness": 0.9456,
-    "velocity_coherence": 0.8742
+    "trustworthiness": 0.9458,
+    "velocity_coherence": 0.9174
   }
 }

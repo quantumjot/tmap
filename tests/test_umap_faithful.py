@@ -185,22 +185,51 @@ def test_graph_invariants_hold_for_every_combination(graphs, symmetrize, count_s
 # --- defaults and plumbing ------------------------------------------------
 
 
-def test_defaults_are_the_historical_behaviour(graphs):
+def test_defaults_are_mean_symmetrisation_and_umap_bandwidth(graphs):
     dist_sparse, _ = graphs
     default = temporal.calculate_high_dimensional_probability_matrix(
         dist_sparse, N_NEIGHBORS
     ).toarray()
     explicit = temporal.calculate_high_dimensional_probability_matrix(
-        dist_sparse, N_NEIGHBORS, symmetrize="mean", count_self=True
+        dist_sparse, N_NEIGHBORS, symmetrize="mean", count_self=False
     ).toarray()
     np.testing.assert_array_equal(default, explicit)
 
 
+def test_historical_behaviour_is_still_reachable(graphs):
+    """count_self=True must reproduce the pre-flip graph exactly."""
+    dist_sparse, _ = graphs
+    historical = temporal.calculate_high_dimensional_probability_matrix(
+        dist_sparse, N_NEIGHBORS, symmetrize="mean", count_self=True
+    ).toarray()
+    default = temporal.calculate_high_dimensional_probability_matrix(
+        dist_sparse, N_NEIGHBORS
+    ).toarray()
+    assert not np.allclose(historical, default)
+
+
+@pytest.mark.parametrize("n_neighbors", [8, 12, 20])
+def test_count_self_is_a_reparameterisation_of_n_neighbors(graphs, n_neighbors):
+    """count_self=True at 2n is *identical* to count_self=False at n.
+
+    This is why the setting is not an independent knob: it only relabels the
+    n_neighbors axis by a factor of two.
+    """
+    dist_sparse, _ = graphs
+    a = temporal.calculate_high_dimensional_probability_matrix(
+        dist_sparse, n_neighbors, count_self=False
+    ).toarray()
+    b = temporal.calculate_high_dimensional_probability_matrix(
+        dist_sparse, 2 * n_neighbors, count_self=True
+    ).toarray()
+    np.testing.assert_allclose(a, b, rtol=1e-9, atol=1e-12)
+
+
 def test_temporalmap_exposes_and_validates_the_options():
     assert temporal.TemporalMAP().symmetrize == "mean"
-    assert temporal.TemporalMAP().count_self is True
-    mapper = temporal.TemporalMAP(symmetrize="union", count_self=False)
-    assert mapper.symmetrize == "union" and mapper.count_self is False
+    assert temporal.TemporalMAP().count_self is False
+    mapper = temporal.TemporalMAP(symmetrize="union", count_self=True)
+    assert mapper.symmetrize == "union" and mapper.count_self is True
     with pytest.raises(ValueError, match="unknown symmetrize"):
         temporal.TemporalMAP(symmetrize="nope")
 
@@ -208,7 +237,7 @@ def test_temporalmap_exposes_and_validates_the_options():
 def test_temporalmap_options_reach_the_graph(sequences):
     a = temporal.TemporalMAP(n_components=2, random_state=0)
     b = temporal.TemporalMAP(
-        n_components=2, random_state=0, symmetrize="union", count_self=False
+        n_components=2, random_state=0, symmetrize="union", count_self=True
     )
     for mapper in (a, b):
         mapper.fit(sequences, max_iterations=1)
