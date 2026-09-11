@@ -4,11 +4,15 @@ import numpy as np
 import numpy.typing as npt
 
 EPSILON_WEIGHT = np.inf
-# UMAP's own default. Since tmap 'count_self=False' (the default) targets
-# log2(N_NEIGHBORS) over the neighbours alone, this now carries the same meaning
-# as UMAP's n_neighbors=15. Historically tmap counted the self-membership, so
-# the effective neighbourhood was 7.5; set count_self=True to recover that.
-N_NEIGHBORS = 15
+# Chosen to preserve tmap's historical *effective* neighbourhood while fixing
+# what the parameter means. The old default (n_neighbors=15 with the
+# self-membership counted toward the log2(k) target) gave an effective
+# neighbourhood of 7.5; with count_self=False the target covers the neighbours
+# alone, so 8 reproduces that operating point almost exactly and now carries
+# UMAP's meaning. Note this is *not* UMAP's own default of 15 -- matching that
+# would double the neighbourhood and cost measurable group purity, a change
+# deferred until there is real-data evidence for it.
+N_NEIGHBORS = 8
 N_COMPONENTS = 2
 MIN_DIST = 0.01
 LEARNING_RATE = 1e-1
