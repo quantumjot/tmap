@@ -5,17 +5,22 @@ Runs the full pipeline on labelled synthetic trajectories and reports every
 metric in :mod:`tmap.evaluate`, so that a change to alignment, graph
 construction or the optimiser can be scored against a common reference.
 
-Because the trajectories come from :func:`tmap.simulate.simulate_trajectories`
-with ``return_labels=True``, the supervised metrics (``knn_purity``,
-``silhouette``) have real ground truth — unlike trustworthiness, which only
-compares the embedding to the high-dimensional input.
+The trajectories carry ground-truth group labels, so the supervised metrics
+(``knn_purity``) mean something — unlike trustworthiness, which only compares
+the embedding to the high-dimensional input.
+
+The default substrate is ``branching``: trajectories share a trunk then diverge
+onto distinct routes, at their own uneven traversal speeds. Scores on it track
+the amount of real structure, so a change can be read against a scale. The
+``oscillator`` substrates are retained for continuity but every trajectory
+there traverses the same 1-D line, so their numbers have no reference point.
 
 Usage
 -----
-    python scripts/eval_baseline.py --branching          # recommended substrate
-    python scripts/eval_baseline.py --branching --branch-time 0.25
-    python scripts/eval_baseline.py                      # oscillator, DTW
-    python scripts/eval_baseline.py --unbalanced         # variable lifetimes
+    python scripts/eval_baseline.py                      # branching (default)
+    python scripts/eval_baseline.py --branch-time 0.25   # easier task
+    python scripts/eval_baseline.py --substrate oscillator
+    python scripts/eval_baseline.py --substrate unbalanced
     python scripts/eval_baseline.py --aligner ot
     python scripts/eval_baseline.py --noise 0.5          # robustness probe
     python scripts/eval_baseline.py --output baseline.json
@@ -49,9 +54,8 @@ def run(
     n: int,
     length: int,
     features: int,
-    noise: float,
-    unbalanced: bool,
-    branching: bool,
+    noise: float | None,
+    substrate: str,
     branch_time: float,
     aligner_name: str,
     n_neighbors: int,
@@ -61,21 +65,28 @@ def run(
     seed: int,
     n_triples: int,
 ) -> dict:
-    if branching:
+    # each substrate has its own sensible noise level; --noise overrides it.
+    # the oscillator keeps 0.0 for continuity with its historical behaviour.
+    if noise is None:
+        noise = 0.05 if substrate == "branching" else 0.0
+
+    if substrate == "branching":
         result = simulate.simulate_branching_trajectories(
             n=n, length=length, n_components=features, branch_time=branch_time,
             noise=noise, seed=seed, return_labels=True,
         )
-    else:
+    elif substrate in ("oscillator", "unbalanced"):
         generator = (
             simulate.simulate_unbalanced_trajectories
-            if unbalanced
+            if substrate == "unbalanced"
             else simulate.simulate_trajectories
         )
         result = generator(
             t=np.linspace(0, 10, length), n=n, n_components=features,
             noise=noise, seed=seed, return_labels=True,
         )
+    else:
+        raise SystemExit(f"unknown substrate: {substrate!r}")
     sequences, labels = result[0], result[1]
 
     aligner = build_aligner(aligner_name)
@@ -108,9 +119,8 @@ def run(
             "length": length,
             "features": features,
             "noise": noise,
-            "unbalanced": unbalanced,
-            "branching": branching,
-            "branch_time": branch_time if branching else None,
+            "substrate": substrate,
+            "branch_time": branch_time if substrate == "branching" else None,
             "aligner": aligner_name,
             "n_neighbors": n_neighbors,
             "n_components": n_components,
@@ -138,15 +148,21 @@ def main() -> None:
     p.add_argument("--sequences", type=int, default=8, help="trajectories per regime (x3 total)")
     p.add_argument("--length", type=int, default=60)
     p.add_argument("--features", type=int, default=3)
-    p.add_argument("--noise", type=float, default=0.0, help="per-component observation noise")
-    p.add_argument("--unbalanced", action="store_true", help="variable-lifetime trajectories")
     p.add_argument(
-        "--branching", action="store_true",
-        help="branching trajectories: shared trunk then divergence (recommended)",
+        "--noise", type=float, default=None,
+        help="per-component observation noise; default is per-substrate "
+             "(0.05 branching, 0.0 oscillator)",
+    )
+    p.add_argument(
+        "--substrate", type=str, default="branching",
+        choices=("branching", "oscillator", "unbalanced"),
+        help="trajectory generator; 'branching' (default) is the only one whose "
+             "scores track the amount of real structure",
     )
     p.add_argument(
         "--branch-time", type=float, default=0.5,
-        help="fraction traversed before branches separate; 1.0 identical paths, 0.0 independent",
+        help="branching only: fraction traversed before branches separate; "
+             "1.0 identical paths, 0.0 independent routes",
     )
     p.add_argument("--aligner", type=str, default="dtw", choices=("dtw", "ot"))
     p.add_argument("--neighbors", type=int, default=15)
@@ -163,8 +179,7 @@ def main() -> None:
         length=args.length,
         features=args.features,
         noise=args.noise,
-        unbalanced=args.unbalanced,
-        branching=args.branching,
+        substrate=args.substrate,
         branch_time=args.branch_time,
         aligner_name=args.aligner,
         n_neighbors=args.neighbors,
@@ -176,13 +191,12 @@ def main() -> None:
     )
 
     cfg = report["config"]
-    substrate = (
-        f"branching(branch_time={cfg['branch_time']})" if cfg["branching"]
-        else ("unbalanced oscillator" if cfg["unbalanced"] else "oscillator")
-    )
+    described = cfg["substrate"]
+    if cfg["branch_time"] is not None:
+        described += f"(branch_time={cfg['branch_time']})"
     print(
         f"{cfg['n_trajectories']} trajectories / {cfg['n_nodes']} nodes, "
-        f"{substrate}, aligner={cfg['aligner']}, noise={cfg['noise']}, k={cfg['k']}"
+        f"{described}, aligner={cfg['aligner']}, noise={cfg['noise']}, k={cfg['k']}"
     )
     print("-" * 58)
     for key, value in report["metrics"].items():
