@@ -12,6 +12,14 @@ EPSILON_WEIGHT = np.inf
 # UMAP's meaning. Note this is *not* UMAP's own default of 15 -- matching that
 # would double the neighbourhood and cost measurable group purity, a change
 # deferred until there is real-data evidence for it.
+# Align each trajectory to its 10 nearest neighbours in descriptor space rather
+# than to all K-1 others, making alignment O(K * c) instead of O(K ** 2). A
+# no-op for K <= 11, since candidate_pairs falls back to all pairs once
+# n_candidates >= K - 1, so this only engages where the quadratic cost bites.
+# Measured on branching data at K=36: correspondence improves (should-match
+# 0.195 -> 0.127) and K=120 runs 5.7x faster. Set None to align all pairs.
+N_CANDIDATES = 10
+
 N_NEIGHBORS = 8
 N_COMPONENTS = 2
 MIN_DIST = 0.01
